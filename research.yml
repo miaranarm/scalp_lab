@@ -1,0 +1,40 @@
+name: Recherche scalping
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: "Symboles (séparés par des virgules)"
+        default: "BTCUSDT,ETHUSDT,SOLUSDT"
+      intervals:
+        description: "Timeframes"
+        default: "5m,15m"
+      days:
+        description: "Jours d'historique"
+        default: "365"
+      capital:
+        description: "Capital en USDT pour l'estimation du gain/jour"
+        default: "100"
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Recherche
+        run: python -u research.py --symbols "${{ inputs.symbols }}" --intervals "${{ inputs.intervals }}" --days "${{ inputs.days }}" --capital "${{ inputs.capital }}"
+      - name: Résumé dans l'onglet du run
+        if: always()
+        run: |
+          if [ -f results/summary.md ]; then cat results/summary.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Sauvegarder les résultats
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-results
+          path: results/
