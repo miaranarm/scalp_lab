@@ -1,43 +1,18 @@
 """
-SCALP LAB V3 — laboratoire de recherche pour scalping Binance USD-M.
+SCALP LAB V3.1 — laboratoire de recherche pour scalping Binance USD-M.
 
-V3 part de V2 et ajoute principalement une couche de CONTEXTE:
-
-    - régime 1h enrichi:
-        * direction EMA20/EMA50
-        * position par rapport à EMA200
-        * pente EMA20 / EMA50
-        * séparation EMA20/EMA50
-
-    - classification de volatilité 1h:
-        * LOW
-        * NORMAL
-        * HIGH
-
-    - filtre de volatilité sur les entrées:
-        * les configurations peuvent accepter certains régimes
-        * la volatilité extrême peut produire NO TRADE
-
-    - scoring TRAIN plus robuste:
-        * rendement moyen
-        * PF
-        * drawdown
-        * stabilité
-        * nombre de trades
-
-    - sélection STRICTEMENT sur TRAIN
-    - TEST totalement hors échantillon
-    - aucune fuite TRAIN -> TEST:
-        signal + entrée + sortie doivent être dans la fenêtre
-    - mêmes données Binance USD-M publiques
-    - mêmes coûts maker/taker et slippage
-    - signal sur bougie clôturée, entrée sur bougie suivante
-    - une position à la fois par symbole
-    - aucune martingale
+V3.1 = V3 avec :
+    - log console compact
+    - séparation TRAIN / TEST stricte
+    - aucun trade ne peut traverser une frontière TRAIN/TEST
+    - stress-test exécuté sur le dataset complet
+    - candidat sélectionné conservé par index global
+    - nettoyage des anciens résultats V2/V3
+    - rapport final V3 uniquement
 
 IMPORTANT:
-    V3 reste un laboratoire de recherche.
-    Elle ne constitue pas une preuve de rentabilité future.
+    V3.1 ne change pas les hypothèses de trading de V3.
+    Elle corrige principalement la méthodologie et la lisibilité.
 """
 
 from __future__ import annotations
@@ -115,11 +90,8 @@ EMA_SLOPE_MIN = 0.00020
 VOL_LOW_QUANTILE = 0.33
 VOL_HIGH_QUANTILE = 0.67
 
-# Une volatilité 1h très élevée devient NO TRADE.
 HIGH_VOL_MAX_MULT = 1.75
 
-# Une distance excessive au EMA200 indique
-# un mouvement déjà très étendu.
 MAX_DISTANCE_EMA200 = 0.045
 
 
@@ -404,10 +376,6 @@ def make_features(
             )
         )
 
-    # --------------------------------------------------------
-    # V3: mesures de contexte
-    # --------------------------------------------------------
-
     ema20_slope = (
         ema20 / ema20.shift(6) - 1
     )
@@ -484,8 +452,6 @@ def align_1h_features(
         }
     )
 
-    # Une bougie 1h ouverte à 10:00 n'est utilisable
-    # qu'à partir de 11:00.
     src = pd.DataFrame(
         {
             "time": (
@@ -568,8 +534,9 @@ def classify_volatility(
         VOL_HIGH_QUANTILE,
     )
 
-    low = valid & (
-        atr_rel <= q_low
+    low = (
+        valid
+        & (atr_rel <= q_low)
     )
 
     normal = (
@@ -584,8 +551,6 @@ def classify_volatility(
         & (atr_rel <= HIGH_VOL_MAX_MULT)
     )
 
-    # Au-delà du seuil extrême:
-    # aucune classe de trading.
     return {
         "low": low,
         "normal": normal,
@@ -684,8 +649,6 @@ def context_masks(
         & (distance <= MAX_DISTANCE_EMA200)
     )
 
-    # Range: EMA20 et EMA50 proches,
-    # prix proche de EMA200.
     range_ = (
         valid
         & (
@@ -728,6 +691,7 @@ def context_masks(
 
 @dataclass(frozen=True)
 class Candidate:
+
     name: str
     signal: np.ndarray
     regime: str
@@ -784,10 +748,6 @@ def build_signal_families(
 
     out = []
 
-    # --------------------------------------------------------
-    # 1. Bollinger + RSI mean reversion
-    # --------------------------------------------------------
-
     for k in (2.0, 2.5):
 
         for rlo in (25, 30):
@@ -805,16 +765,9 @@ def build_signal_families(
             out.append(
                 (
                     f"bb_rsi k={k} rsi<{rlo}",
-                    _sig(
-                        long_,
-                        short_,
-                    ),
+                    _sig(long_, short_),
                 )
             )
-
-    # --------------------------------------------------------
-    # 2. Z-score
-    # --------------------------------------------------------
 
     for n in (30, 60):
 
@@ -837,10 +790,6 @@ def build_signal_families(
                     ),
                 )
             )
-
-    # --------------------------------------------------------
-    # 3. Donchian breakout
-    # --------------------------------------------------------
 
     for n in (20, 50):
 
@@ -881,10 +830,6 @@ def build_signal_families(
                 )
             )
 
-    # --------------------------------------------------------
-    # 4. VWAP deviation
-    # --------------------------------------------------------
-
     for n, vw in (
         (48, vwap48),
         (96, vwap96),
@@ -910,10 +855,6 @@ def build_signal_families(
                 )
             )
 
-    # --------------------------------------------------------
-    # 5. Trend pullback
-    # --------------------------------------------------------
-
     for thr in (35, 40):
 
         up = (
@@ -935,10 +876,6 @@ def build_signal_families(
                 ),
             )
         )
-
-    # --------------------------------------------------------
-    # 6. EMA cross
-    # --------------------------------------------------------
 
     cross_up = (
         (ema20 > ema50)
@@ -965,10 +902,6 @@ def build_signal_families(
             ),
         )
     )
-
-    # --------------------------------------------------------
-    # 7. Breakout + ATR expansion
-    # --------------------------------------------------------
 
     atr_pct = (
         atr / c.replace(
@@ -1009,10 +942,6 @@ def build_signal_families(
         )
     )
 
-    # --------------------------------------------------------
-    # 8. VWAP trend continuation
-    # --------------------------------------------------------
-
     out.append(
         (
             "vwap48_trend",
@@ -1021,7 +950,7 @@ def build_signal_families(
                 & (ema20 > ema50),
                 (c < vwap48)
                 & (ema20 < ema50),
-            ),
+            )
         )
     )
 
@@ -1044,9 +973,7 @@ def make_candidates(
         h1,
     )
 
-    ctx = context_masks(
-        h1f
-    )
+    ctx = context_masks(h1f)
 
     base = build_signal_families(
         ef
@@ -1084,13 +1011,6 @@ def make_candidates(
 
                 s = sig.copy()
 
-                # ------------------------------------------------
-                # Appliquer le régime.
-                #
-                # Un signal LONG doit respecter long_ok.
-                # Un signal SHORT doit respecter short_ok.
-                # ------------------------------------------------
-
                 invalid_long = (
                     (s > 0)
                     & ~long_ok
@@ -1106,28 +1026,14 @@ def make_candidates(
                     | invalid_short
                 ] = 0
 
-                # ------------------------------------------------
-                # Appliquer la classe de volatilité.
-                #
-                # Les zones au-dessus de HIGH_VOL_MAX_MULT
-                # ne sont dans aucune classe => NO TRADE.
-                # ------------------------------------------------
-
                 active = (
                     s != 0
                 )
 
-                s[
-                    active
-                ] *= vol_ok[
-                    active
-                ].astype(
-                    np.int8
+                s[active] *= (
+                    vol_ok[active]
+                    .astype(np.int8)
                 )
-
-                # ------------------------------------------------
-                # Éviter les candidats totalement vides.
-                # ------------------------------------------------
 
                 if np.count_nonzero(s) == 0:
                     continue
@@ -1209,8 +1115,6 @@ def simulate(
         * fee_scale
     )
 
-    through = THROUGH
-
     slip_eff = (
         slip * slip_scale
     )
@@ -1219,9 +1123,7 @@ def simulate(
 
     free = 0
 
-    for i in np.flatnonzero(
-        sig
-    ).tolist():
+    for i in np.flatnonzero(sig).tolist():
 
         if i < free:
             continue
@@ -1241,10 +1143,6 @@ def simulate(
         ):
             continue
 
-        # --------------------------------------------------------
-        # ENTRÉE MAKER
-        # --------------------------------------------------------
-
         if maker_entry:
 
             lim = c[i]
@@ -1253,8 +1151,7 @@ def simulate(
 
                 if not (
                     l[k]
-                    < lim
-                    * (1 - through)
+                    < lim * (1 - THROUGH)
                 ):
                     continue
 
@@ -1262,17 +1159,12 @@ def simulate(
 
                 if not (
                     h[k]
-                    > lim
-                    * (1 + through)
+                    > lim * (1 + THROUGH)
                 ):
                     continue
 
             entry = lim
             e_fee = fee_maker
-
-        # --------------------------------------------------------
-        # ENTRÉE TAKER
-        # --------------------------------------------------------
 
         else:
 
@@ -1289,10 +1181,6 @@ def simulate(
         ):
             continue
 
-        # --------------------------------------------------------
-        # TP / SL
-        # --------------------------------------------------------
-
         tp = (
             entry
             + s * tp_m * a
@@ -1304,19 +1192,13 @@ def simulate(
         )
 
         tp_chk = (
-            tp
-            * (
-                1 + s * through
-            )
+            tp * (1 + s * THROUGH)
             if maker_tp
             else tp
         )
 
         last = (
-            min(
-                k + hold,
-                n,
-            )
+            min(k + hold, n)
             - 1
         )
 
@@ -1347,8 +1229,6 @@ def simulate(
                     l[j] <= tp_chk
                 )
 
-            # OHLC ambiguity:
-            # SL d'abord, comme V2.
             if hit_sl:
 
                 exit_px = (
@@ -1383,10 +1263,6 @@ def simulate(
 
             j += 1
 
-        # --------------------------------------------------------
-        # SORTIE TEMPORELLE
-        # --------------------------------------------------------
-
         if exit_px is None:
 
             j = last
@@ -1401,10 +1277,6 @@ def simulate(
             )
 
             kind = "time"
-
-        # --------------------------------------------------------
-        # FRAIS DE SORTIE
-        # --------------------------------------------------------
 
         x_fee = (
             fee_maker
@@ -1424,9 +1296,7 @@ def simulate(
         net = (
             gross
             - e_fee
-            - x_fee
-            * exit_px
-            / entry
+            - x_fee * exit_px / entry
         )
 
         rows.append(
@@ -1444,9 +1314,7 @@ def simulate(
 
         free = j
 
-    return pd.DataFrame(
-        rows
-    )
+    return pd.DataFrame(rows)
 
 
 # ============================================================
@@ -1476,35 +1344,20 @@ def basic_stats(
         dtype=float
     )
 
-    wins = x[
-        x > 0
-    ].sum()
-
-    losses = -x[
-        x < 0
-    ].sum()
+    wins = x[x > 0].sum()
+    losses = -x[x < 0].sum()
 
     return {
         "n": len(x),
-        "mean": float(
-            x.mean()
-        ),
+        "mean": float(x.mean()),
         "sd": (
-            float(
-                x.std(
-                    ddof=1
-                )
-            )
+            float(x.std(ddof=1))
             if len(x) > 1
             else np.nan
         ),
-        "win": float(
-            (x > 0).mean()
-        ),
+        "win": float((x > 0).mean()),
         "pf": (
-            float(
-                wins / losses
-            )
+            float(wins / losses)
             if losses > 0
             else float("inf")
         ),
@@ -1535,10 +1388,7 @@ def equity_stats(
         dtype=float
     )
 
-    equity = [
-        capital
-    ]
-
+    equity = [capital]
     cur = capital
 
     for r in x:
@@ -1548,21 +1398,13 @@ def equity_stats(
             1.0 + r,
         )
 
-        equity.append(
-            cur
-        )
+        equity.append(cur)
 
-    eq = np.asarray(
-        equity
-    )
+    eq = np.asarray(equity)
 
-    peak = np.maximum.accumulate(
-        eq
-    )
+    peak = np.maximum.accumulate(eq)
 
-    dd = (
-        eq / peak - 1.0
-    )
+    dd = eq / peak - 1.0
 
     streak = 0
     max_streak = 0
@@ -1572,7 +1414,6 @@ def equity_stats(
         if r < 0:
 
             streak += 1
-
             max_streak = max(
                 max_streak,
                 streak,
@@ -1583,20 +1424,12 @@ def equity_stats(
             streak = 0
 
     return {
-        "final": float(
-            eq[-1]
-        ),
+        "final": float(eq[-1]),
         "return": float(
-            eq[-1]
-            / capital
-            - 1
+            eq[-1] / capital - 1
         ),
-        "max_dd": float(
-            dd.min()
-        ),
-        "worst_trade": float(
-            x.min()
-        ),
+        "max_dd": float(dd.min()),
+        "worst_trade": float(x.min()),
         "max_loss_streak": int(
             max_streak
         ),
@@ -1604,28 +1437,13 @@ def equity_stats(
 
 
 # ============================================================
-# V3 SCORE TRAIN
+# SCORE TRAIN
 # ============================================================
 
 def score_training(
     stats,
     equity,
 ):
-
-    """
-    Score de sélection TRAIN uniquement.
-
-    Le but n'est PAS de maximiser le rendement brut.
-
-    Le score récompense:
-        - mean/trade positif
-        - PF supérieur à 1
-        - nombre de trades
-        - faible drawdown
-        - faible dispersion
-
-    Le TEST n'est jamais utilisé ici.
-    """
 
     n = stats["n"]
 
@@ -1635,9 +1453,7 @@ def score_training(
     mean = stats["mean"]
     pf = stats["pf"]
     sd = stats["sd"]
-    dd = abs(
-        equity["max_dd"]
-    )
+    dd = abs(equity["max_dd"])
 
     if not np.isfinite(mean):
         return -np.inf
@@ -1694,9 +1510,7 @@ def score_training(
         - 0.15 * dd_penalty
     )
 
-    return float(
-        score
-    )
+    return float(score)
 
 
 # ============================================================
@@ -1728,17 +1542,10 @@ def monte_carlo(
         dtype=float
     )
 
-    rng = np.random.default_rng(
-        seed
-    )
+    rng = np.random.default_rng(seed)
 
-    finals = np.empty(
-        runs
-    )
-
-    dds = np.empty(
-        runs
-    )
+    finals = np.empty(runs)
+    dds = np.empty(runs)
 
     for r in range(runs):
 
@@ -1795,7 +1602,7 @@ def monte_carlo(
 
 
 # ============================================================
-# WALK-FORWARD
+# WALK FORWARD
 # ============================================================
 
 def make_folds(
@@ -1849,55 +1656,7 @@ def make_folds(
 
 
 # ============================================================
-# FILTRAGE STRICT D'UNE FENÊTRE
-# ============================================================
-
-def filter_trades_to_window(
-    trades: pd.DataFrame,
-    start: int,
-    end: int,
-):
-    """
-    Conserve uniquement les trades entièrement contenus
-    dans [start, end).
-
-    Conditions:
-        signal_i >= start
-        signal_i <  end
-        entry_i  >= start
-        entry_i  <  end
-        exit_i   >= start
-        exit_i   <  end
-
-    Cela empêche qu'un trade commencé dans TRAIN se termine
-    dans TEST, ou qu'un trade commencé dans TEST se termine
-    après TEST.
-    """
-
-    if (
-        trades is None
-        or trades.empty
-    ):
-        return pd.DataFrame(
-            columns=(
-                trades.columns
-                if trades is not None
-                else []
-            )
-        )
-
-    return trades[
-        (trades["signal_i"] >= start)
-        & (trades["signal_i"] < end)
-        & (trades["entry_i"] >= start)
-        & (trades["entry_i"] < end)
-        & (trades["exit_i"] >= start)
-        & (trades["exit_i"] < end)
-    ].copy()
-
-
-# ============================================================
-# STRESS TEST
+# STRESS TEST V3.1
 # ============================================================
 
 def stress_test(
@@ -1908,85 +1667,29 @@ def stress_test(
     test_start: int,
     test_end: int,
 ):
+
     """
-    Rejoue EXACTEMENT le candidat sélectionné
-    sur la fenêtre TEST.
+    Rejoue exactement le candidat sélectionné
+    sur le dataset complet puis isole strictement
+    la fenêtre TEST.
 
     IMPORTANT:
-
-        - ne reconstruit PAS les candidats
-        - ne recalcule PAS les indicateurs
-        - utilise le candidat original sélectionné
-        - utilise le même signal que le walk-forward
-        - applique différents niveaux de frais/slippage
-        - ne conserve que les trades entièrement contenus
-          dans la fenêtre TEST
-
-    Cette architecture corrige le bug V3 précédent:
-
-        best_spec["candidate"]
-
-    est un index dans la liste originale `candidates`.
-
-    Il ne faut donc surtout pas reconstruire une nouvelle
-    liste de candidats à partir de entry.iloc[test_start:test_end],
-    car cette liste peut avoir une longueur différente.
+        candidates est la liste originale globale.
+        Aucun recalcul de candidats n'est effectué.
     """
 
-    candidate_index = int(
-        best_spec["candidate"]
-    )
-
-    if (
-        candidate_index < 0
-        or candidate_index >= len(candidates)
-    ):
-        raise IndexError(
-            "Candidat V3 invalide pour stress_test: "
-            f"index={candidate_index}, "
-            f"nombre_candidats={len(candidates)}"
-        )
-
     cand = candidates[
-        candidate_index
+        int(best_spec["candidate"])
     ]
 
     scenarios = [
-        (
-            "base",
-            1.0,
-            1.0,
-        ),
-        (
-            "fees+25%",
-            1.25,
-            1.0,
-        ),
-        (
-            "fees+50%",
-            1.50,
-            1.0,
-        ),
-        (
-            "fees+100%",
-            2.00,
-            1.0,
-        ),
-        (
-            "slip+50%",
-            1.0,
-            1.50,
-        ),
-        (
-            "slip+100%",
-            1.0,
-            2.00,
-        ),
-        (
-            "fees+50%_slip+100%",
-            1.50,
-            2.00,
-        ),
+        ("base", 1.0, 1.0),
+        ("fees+25%", 1.25, 1.0),
+        ("fees+50%", 1.50, 1.0),
+        ("fees+100%", 2.00, 1.0),
+        ("slip+50%", 1.0, 1.50),
+        ("slip+100%", 1.0, 2.00),
+        ("fees+50%_slip+100%", 1.50, 2.00),
     ]
 
     rows = []
@@ -2001,36 +1704,32 @@ def stress_test(
         tr_all = simulate(
             Lfull,
             cand.signal,
-            float(
-                best_spec["tp"]
-            ),
-            float(
-                best_spec["sl"]
-            ),
-            int(
-                best_spec["hold"]
-            ),
+            float(best_spec["tp"]),
+            float(best_spec["sl"]),
+            int(best_spec["hold"]),
             best_spec["profile"],
             slip,
             fee_scale=fs,
             slip_scale=ss,
         )
 
-        # ----------------------------------------------------
-        # IMPORTANT:
-        # stress test = TEST uniquement
-        # et trade entièrement contenu dans TEST.
-        # ----------------------------------------------------
+        if tr_all.empty:
 
-        tr = filter_trades_to_window(
-            tr_all,
-            test_start,
-            test_end,
-        )
+            tr = tr_all
 
-        st = basic_stats(
-            tr
-        )
+        else:
+
+            tr = (
+                tr_all[
+                    (tr_all.signal_i >= test_start)
+                    & (tr_all.signal_i < test_end)
+                    & (tr_all.entry_i >= test_start)
+                    & (tr_all.exit_i < test_end)
+                ]
+                .copy()
+            )
+
+        st = basic_stats(tr)
 
         es = equity_stats(
             tr,
@@ -2049,9 +1748,7 @@ def stress_test(
             }
         )
 
-    return pd.DataFrame(
-        rows
-    )
+    return pd.DataFrame(rows)
 
 
 # ============================================================
@@ -2064,11 +1761,7 @@ def main():
 
     ap.add_argument(
         "--symbols",
-        default=(
-            "BTCUSDT,"
-            "ETHUSDT,"
-            "SOLUSDT"
-        ),
+        default="BTCUSDT,ETHUSDT,SOLUSDT",
     )
 
     ap.add_argument(
@@ -2113,32 +1806,25 @@ def main():
         exist_ok=True,
     )
 
-    # ========================================================
-    # NETTOYAGE DES ANCIENS RÉSULTATS
-    # ========================================================
-    #
-    # Important:
-    # si un ancien summary_v2.md ou stress_test.csv reste
-    # après un crash, il ne doit pas être confondu avec
-    # le résultat du nouveau run V3.
-    #
+    # --------------------------------------------------------
+    # Nettoyage des anciens résultats.
+    # --------------------------------------------------------
 
-    old_result_files = [
-        "results/walk_forward.csv",
-        "results/stress_test.csv",
-        "results/summary_v2.md",
-        "results/summary_v3.md",
-    ]
+    for filename in (
+        "walk_forward.csv",
+        "stress_test.csv",
+        "summary_v2.md",
+        "summary_v3.md",
+    ):
 
-    for path in old_result_files:
+        path = os.path.join(
+            "results",
+            filename,
+        )
 
-        try:
+        if os.path.exists(path):
 
-            if os.path.exists(path):
-                os.remove(path)
-
-        except OSError:
-            pass
+            os.remove(path)
 
     md = []
 
@@ -2152,75 +1838,39 @@ def main():
         md.append(s)
 
     out(
-        "# SCALP LAB V3 — "
+        "# SCALP LAB V3.1 — "
         "recherche scalping Binance USD-M"
     )
 
     out("")
 
-    out("## Méthode")
-
     out(
-        "- données réelles Binance USD-M, "
-        "bougies publiques"
+        "Méthode: données Binance USD-M | "
+        "signal clôturé → entrée suivante | "
+        "1h contexte | 5m/15m entrée"
     )
 
     out(
-        f"- coûts: taker "
-        f"{FEE_TAKER*100:.2f}% / maker "
-        f"{FEE_MAKER*100:.2f}% par côté"
+        f"Coûts: taker={FEE_TAKER*100:.2f}% "
+        f"maker={FEE_MAKER*100:.2f}% par côté | "
+        f"WF={TRAIN_DAYS}j/"
+        f"{TEST_DAYS}j/"
+        f"{STEP_DAYS}j"
     )
 
     out(
-        "- slippage spécifique par symbole "
-        "+ stress-test"
-    )
-
-    out(
-        "- signal sur bougie clôturée, "
-        "entrée sur bougie suivante"
-    )
-
-    out(
-        "- 1h = contexte/régime, "
-        "5m/15m = setup et entrée"
-    )
-
-    out(
-        f"- walk-forward: "
-        f"{TRAIN_DAYS}j train / "
-        f"{TEST_DAYS}j test / "
-        f"pas de {STEP_DAYS}j"
-    )
-
-    out(
-        "- V3: pente EMA + séparation EMA "
-        "+ distance EMA200 + volatilité"
-    )
-
-    out(
-        "- V3: possibilité explicite de NO TRADE"
-    )
-
-    out(
-        "- V3: aucun trade TRAIN ne peut "
-        "déborder dans TEST"
-    )
-
-    out(
-        "- V3: aucun trade TEST ne peut "
-        "déborder après la fin de TEST"
-    )
-
-    out(
-        "- position fixe, aucune martingale, "
-        "une position à la fois"
+        f"Recherche: "
+        f"{len(EXITS)} exits × "
+        f"{len(PROFILES)} profils | "
+        f"minimum TRAIN={MIN_TRAIN_TRADES}"
     )
 
     out("")
 
     all_wf = []
     all_stress = []
+
+    total_start = time.time()
 
     # ========================================================
     # BOUCLE PRINCIPALE
@@ -2239,9 +1889,7 @@ def main():
 
         for symbol in symbols:
 
-            out(
-                f"## {symbol} {interval}"
-            )
+            pair_start = time.time()
 
             end_ms = int(
                 time.time() * 1000
@@ -2257,11 +1905,6 @@ def main():
             # ENTRY
             # ------------------------------------------------
 
-            out(
-                f"Téléchargement "
-                f"{symbol} {interval}..."
-            )
-
             entry = to_frame(
                 fetch_vision(
                     symbol,
@@ -2273,22 +1916,14 @@ def main():
 
             entry = (
                 entry[
-                    entry.time
-                    >= start_ms
+                    entry.time >= start_ms
                 ]
-                .reset_index(
-                    drop=True
-                )
+                .reset_index(drop=True)
             )
 
             # ------------------------------------------------
             # 1H
             # ------------------------------------------------
-
-            out(
-                f"Téléchargement "
-                f"{symbol} 1h..."
-            )
 
             h1 = to_frame(
                 fetch_vision(
@@ -2301,12 +1936,9 @@ def main():
 
             h1 = (
                 h1[
-                    h1.time
-                    >= start_ms
+                    h1.time >= start_ms
                 ]
-                .reset_index(
-                    drop=True
-                )
+                .reset_index(drop=True)
             )
 
             if (
@@ -2315,10 +1947,10 @@ def main():
             ):
 
                 out(
-                    f"INSUFFISANT: "
-                    f"{len(entry)} bougies "
-                    f"{interval}, "
-                    f"{len(h1)} bougies 1h"
+                    f"{symbol} {interval} | "
+                    f"INSUFFISANT | "
+                    f"{len(entry)} candles | "
+                    f"{len(h1)} h1"
                 )
 
                 continue
@@ -2326,13 +1958,6 @@ def main():
             folds = make_folds(
                 len(entry),
                 interval,
-            )
-
-            out(
-                f"- {len(entry)} bougies "
-                f"{interval}, "
-                f"{len(h1)} bougies 1h, "
-                f"{len(folds)} folds"
             )
 
             # ------------------------------------------------
@@ -2347,8 +1972,11 @@ def main():
             )
 
             out(
-                f"- {len(candidates)} "
-                f"candidats V3"
+                f"{symbol} {interval} | "
+                f"{len(entry)} candles | "
+                f"{len(h1)} h1 | "
+                f"{len(candidates)} candidats | "
+                f"{len(folds)} folds"
             )
 
             Lfull = {
@@ -2386,7 +2014,7 @@ def main():
                 best = None
 
                 # --------------------------------------------
-                # SÉLECTION TRAIN
+                # TRAIN
                 # --------------------------------------------
 
                 for ci, cand in enumerate(
@@ -2416,24 +2044,19 @@ def main():
                             if tr_all.empty:
                                 continue
 
-                            # --------------------------------
-                            # CORRECTION IMPORTANTE:
-                            #
-                            # Le trade doit être entièrement
-                            # contenu dans TRAIN.
-                            #
-                            # Cela empêche un trade dont le
-                            # signal est en TRAIN mais dont
-                            # la sortie tombe en TEST de
-                            # contaminer la sélection.
-                            # --------------------------------
+                            # IMPORTANT:
+                            # signal + entrée + sortie
+                            # doivent être intégralement
+                            # dans TRAIN.
 
                             tr_train = (
-                                filter_trades_to_window(
-                                    tr_all,
-                                    tr0,
-                                    tr1,
-                                )
+                                tr_all[
+                                    (tr_all.signal_i >= tr0)
+                                    & (tr_all.signal_i < tr1)
+                                    & (tr_all.entry_i >= tr0)
+                                    & (tr_all.exit_i < tr1)
+                                ]
+                                .copy()
                             )
 
                             if (
@@ -2451,11 +2074,9 @@ def main():
                                 args.capital,
                             )
 
-                            score = (
-                                score_training(
-                                    st,
-                                    es,
-                                )
+                            score = score_training(
+                                st,
+                                es,
                             )
 
                             if (
@@ -2485,9 +2106,8 @@ def main():
                 if best is None:
 
                     out(
-                        f"  fold {fold_id}: "
-                        "aucune stratégie avec "
-                        "assez de trades"
+                        f"  Fold {fold_id}/{len(folds)} "
+                        "→ aucun candidat TRAIN"
                     )
 
                     continue
@@ -2505,37 +2125,34 @@ def main():
                 te_all = simulate(
                     Lfull,
                     cand.signal,
-                    float(
-                        best["tp"]
-                    ),
-                    float(
-                        best["sl"]
-                    ),
-                    int(
-                        best["hold"]
-                    ),
+                    float(best["tp"]),
+                    float(best["sl"]),
+                    int(best["hold"]),
                     best["profile"],
                     slip,
                 )
 
-                # --------------------------------------------
-                # CORRECTION IMPORTANTE:
-                #
-                # Le trade doit être entièrement contenu
-                # dans TEST.
-                # --------------------------------------------
+                if te_all.empty:
 
-                te = (
-                    filter_trades_to_window(
-                        te_all,
-                        te0,
-                        te1,
+                    te = te_all
+
+                else:
+
+                    # IMPORTANT:
+                    # le trade doit être entièrement
+                    # contenu dans TEST.
+
+                    te = (
+                        te_all[
+                            (te_all.signal_i >= te0)
+                            & (te_all.signal_i < te1)
+                            & (te_all.entry_i >= te0)
+                            & (te_all.exit_i < te1)
+                        ]
+                        .copy()
                     )
-                )
 
-                st_te = basic_stats(
-                    te
-                )
+                st_te = basic_stats(te)
 
                 es_te = equity_stats(
                     te,
@@ -2587,49 +2204,10 @@ def main():
                     "mc_dd_median": mc["mc_dd_median"],
                 }
 
-                all_wf.append(
-                    row
-                )
-
-                # ------------------------------------------------
-                # AFFICHAGE TEST
-                # ------------------------------------------------
-
-                pf_text = (
-                    f"{st_te['pf']:.2f}"
-                    if np.isfinite(
-                        st_te["pf"]
-                    )
-                    else "inf"
-                )
-
-                mean_text = (
-                    f"{st_te['mean']*100:+.4f}%"
-                    if np.isfinite(
-                        st_te["mean"]
-                    )
-                    else "nan"
-                )
-
-                dd_text = (
-                    f"{es_te['max_dd']*100:.2f}%"
-                )
-
-                out(
-                    f"  fold {fold_id}: "
-                    f"{best['signal']} / "
-                    f"{best['regime']} / "
-                    f"{best['volatility']} / "
-                    f"{best['profile']} "
-                    f"→ TEST "
-                    f"{mean_text} "
-                    f"PF={pf_text} "
-                    f"DD={dd_text} "
-                    f"n={st_te['n']}"
-                )
+                all_wf.append(row)
 
                 # --------------------------------------------
-                # STRESS TEST
+                # STRESS
                 # --------------------------------------------
 
                 stress = stress_test(
@@ -2644,42 +2222,32 @@ def main():
                 stress["symbol"] = symbol
                 stress["interval"] = interval
                 stress["fold"] = fold_id
+                stress["signal"] = best["signal"]
+                stress["regime"] = best["regime"]
+                stress["volatility"] = best["volatility"]
+                stress["profile"] = best["profile"]
 
-                stress["signal"] = best[
-                    "signal"
-                ]
+                all_stress.append(stress)
 
-                stress["regime"] = best[
-                    "regime"
-                ]
-
-                stress["volatility"] = best[
-                    "volatility"
-                ]
-
-                stress["profile"] = best[
-                    "profile"
-                ]
-
-                stress["candidate"] = best[
-                    "candidate"
-                ]
-
-                stress["tp"] = best[
-                    "tp"
-                ]
-
-                stress["sl"] = best[
-                    "sl"
-                ]
-
-                stress["hold"] = best[
-                    "hold"
-                ]
-
-                all_stress.append(
-                    stress
+                out(
+                    f"  Fold {fold_id}/{len(folds)} → "
+                    f"{best['signal']} / "
+                    f"{best['regime']} / "
+                    f"{best['volatility']} / "
+                    f"{best['profile']} | "
+                    f"TEST "
+                    f"{st_te['mean']*100:+.4f}% | "
+                    f"PF={st_te['pf']:.2f} | "
+                    f"DD={es_te['max_dd']*100:.2f}% | "
+                    f"n={st_te['n']}"
                 )
+
+            pair_elapsed = time.time() - pair_start
+
+            out(
+                f"  → terminé en "
+                f"{pair_elapsed/60:.1f} min"
+            )
 
     # ========================================================
     # EXPORT
@@ -2719,11 +2287,7 @@ def main():
     # ========================================================
 
     out("")
-
-    out(
-        "## Résultat global walk-forward"
-    )
-
+    out("## Résultat global walk-forward")
     out("")
 
     out(
@@ -2762,10 +2326,8 @@ def main():
     # ========================================================
 
     out("")
-
-    out(
-        "## Résultat par symbole"
-    )
+    out("## Résultat par symbole")
+    out("")
 
     out(
         "| symbole | intervalle | folds | "
@@ -2802,11 +2364,7 @@ def main():
     # ========================================================
 
     out("")
-
-    out(
-        "## Résultat par régime V3"
-    )
-
+    out("## Résultat par régime V3")
     out("")
 
     out(
@@ -2838,11 +2396,7 @@ def main():
     # ========================================================
 
     out("")
-
-    out(
-        "## Résultat par volatilité V3"
-    )
-
+    out("## Résultat par volatilité V3")
     out("")
 
     out(
@@ -2874,10 +2428,8 @@ def main():
     # ========================================================
 
     out("")
-
-    out(
-        "## Robustesse des coûts"
-    )
+    out("## Robustesse des coûts")
+    out("")
 
     if not ST.empty:
 
@@ -2885,53 +2437,23 @@ def main():
             "scenario"
         ):
 
-            mean_value = (
-                x["mean"].mean()
-            )
-
-            pf_value = (
-                x["pf"].median()
-            )
-
-            dd_value = (
-                x["max_dd"].median()
-            )
-
-            mean_text = (
-                f"{mean_value*100:+.4f}%"
-                if np.isfinite(
-                    mean_value
-                )
-                else "nan"
-            )
-
-            pf_text = (
-                f"{pf_value:.2f}"
-                if np.isfinite(
-                    pf_value
-                )
-                else "inf"
-            )
-
             out(
                 f"- **{scenario}** : "
                 f"mean/trade "
-                f"{mean_text} ; "
+                f"{x['mean'].mean()*100:+.4f}% ; "
                 f"PF médian "
-                f"{pf_text} ; "
+                f"{x['pf'].median():.2f} ; "
                 f"DD médian "
-                f"{dd_value*100:.2f}%"
+                f"{x['max_dd'].median()*100:.2f}%"
             )
 
     # ========================================================
-    # UTILISATION DES RÉGIMES
+    # DISTRIBUTION
     # ========================================================
 
     out("")
-
-    out(
-        "## Distribution des choix V3"
-    )
+    out("## Distribution des choix V3")
+    out("")
 
     regime_counts = (
         WF["regime"]
@@ -2956,57 +2478,6 @@ def main():
     )
 
     # ========================================================
-    # CONTRÔLES MÉTHODOLOGIQUES
-    # ========================================================
-
-    out("")
-
-    out(
-        "## Contrôles méthodologiques V3"
-    )
-
-    out("")
-
-    out(
-        "- sélection des configurations "
-        "exclusivement sur TRAIN"
-    )
-
-    out(
-        "- aucun trade TRAIN ne déborde "
-        "dans TEST"
-    )
-
-    out(
-        "- aucun trade TEST ne déborde "
-        "après la fin de TEST"
-    )
-
-    out(
-        "- stress test basé sur le candidat "
-        "original sélectionné"
-    )
-
-    out(
-        "- aucune reconstruction des candidats "
-        "sur la fenêtre TEST"
-    )
-
-    out(
-        "- signal calculé sur bougie clôturée"
-    )
-
-    out(
-        "- entrée sur bougie suivante"
-    )
-
-    out(
-        "- OHLC ambiguity: SL prioritaire "
-        "si TP et SL sont touchés sur la "
-        "même bougie"
-    )
-
-    # ========================================================
     # VERDICT TECHNIQUE
     # ========================================================
 
@@ -3016,9 +2487,7 @@ def main():
         ).sum()
     )
 
-    total_folds = len(
-        WF
-    )
+    total_folds = len(WF)
 
     median_test = float(
         WF.test_mean.median()
@@ -3029,15 +2498,11 @@ def main():
     )
 
     out("")
-
-    out(
-        "## Verdict V3"
-    )
+    out("## Verdict V3")
 
     if (
         total_folds >= 8
-        and positive_folds
-        / total_folds >= 0.60
+        and positive_folds / total_folds >= 0.60
         and median_test > 0
         and median_pf > 1.0
     ):
@@ -3073,7 +2538,7 @@ def main():
     )
 
     # ========================================================
-    # ÉCRITURE DU RAPPORT
+    # ÉCRITURE RAPPORT
     # ========================================================
 
     with open(
@@ -3085,6 +2550,29 @@ def main():
         f.write(
             "\n".join(md)
         )
+
+    elapsed = time.time() - total_start
+
+    print("")
+    print("=" * 60)
+    print("V3.1 TERMINÉE")
+    print("=" * 60)
+    print(
+        f"Durée totale : {elapsed/60:.1f} min"
+    )
+    print(
+        f"Folds analysés : {len(WF)}"
+    )
+    print(
+        "results/summary_v3.md"
+    )
+    print(
+        "results/walk_forward.csv"
+    )
+    print(
+        "results/stress_test.csv"
+    )
+    print("=" * 60)
 
 
 if __name__ == "__main__":
