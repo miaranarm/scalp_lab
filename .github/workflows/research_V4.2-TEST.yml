@@ -12,7 +12,6 @@ jobs:
     timeout-minutes: 30
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -39,7 +38,7 @@ jobs:
           echo "=============================================="
           echo "Symbols : BTCUSDT ETHUSDT SOLUSDT"
           echo "Interval: 1h"
-          echo "History : 365 days"
+          echo "History : 730 days"
           echo "MC runs : 0"
           echo "WF      : 180 / 45 / 45 days"
           echo "Holdout : 90 days"
@@ -48,7 +47,7 @@ jobs:
           python -u research_v42.py \
             --symbols "BTCUSDT,ETHUSDT,SOLUSDT" \
             --intervals "1h" \
-            --days "365" \
+            --days "730" \
             --capital "100" \
             --mc-runs "0" \
             > "$LOG" 2>&1
