@@ -1,0 +1,2 @@
+symbol,interval,signal,regime,profile,tp,sl,hold,active_folds,total_trades,mean_oos,median_oos,std_oos,t_oos,positive_fold_ratio,beat_random_ratio,median_pf,median_dd,mean_edge_random,median_edge_random,robustness_score,robust
+ETHUSDT,1h,vwap n=48 k=2.0,all,maker_tp,2.0,2.0,24,1,56,-0.0035452327623209895,-0.0035452327623209895,,,0.0,0.0,0.7113897826417439,-0.281337759896083,-0.002532142321196172,-0.002532142321196172,0.1768357995469914,False
