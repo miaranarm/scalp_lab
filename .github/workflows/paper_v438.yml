@@ -19,5 +19,5 @@ jobs:
 
       - run: pip install -q websocket-client
 
-      - name: Futures trade test
-        run: timeout 45s python -u feed_test.py
+      - name: Trade stream test
+        run: timeout 20s python -u feed_test.py
