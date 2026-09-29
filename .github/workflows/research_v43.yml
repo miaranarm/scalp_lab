@@ -20,12 +20,14 @@ jobs:
 
       - name: Install
         run: |
-          python -m pip install --upgrade pip
-          pip install requests==2.32.5 pandas==2.2.3 numpy==2.1.3
+          python -m pip install -q --upgrade pip
+          pip install -q requests==2.32.5 pandas==2.2.3 numpy==2.1.3
+
+      - name: Clean
+        run: rm -rf results && mkdir results
 
       - name: Run
         run: |
-          set +e
           python -u research_v43.py \
             --symbols BTCUSDT ETHUSDT SOLUSDT \
             --intervals 1h \
@@ -33,17 +35,14 @@ jobs:
             --capital 100 \
             --mc-runs 0 \
             --random-runs 0
-          rc=$?
-          echo "EXIT=$rc"
-          exit $rc
 
       - name: Results
         if: always()
         run: |
-          echo "RESULTS"
-          ls -lh results/ 2>/dev/null || true
-          echo "--- SUMMARY ---"
+          echo "---"
           cat results/summary_v43.md 2>/dev/null || true
+          echo "---"
+          ls -lh results/ 2>/dev/null || true
 
       - name: Upload
         if: always()
