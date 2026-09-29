@@ -1,18 +1,11 @@
-import json,requests
+import json,websocket
 from pathlib import Path
 from datetime import datetime,timedelta,timezone
 
 S="SOLUSDT"
 STATE=Path("state/live_v4386.json")
 OUT=Path("results/live_candles_v438.csv")
-
-HOSTS=[
- "https://fapi.binance.com",
- "https://fapi1.binance.com",
- "https://fapi2.binance.com",
- "https://fapi3.binance.com",
- "https://fapi4.binance.com"
-]
+WS="wss://ws-fapi.binance.com/ws-fapi/v1"
 
 def dt(x):return datetime.fromisoformat(x).astimezone(timezone.utc)
 def iso(x):return x.strftime("%Y-%m-%dT%H:%M:%S+00:00")
@@ -22,32 +15,48 @@ def load():
   print("STATE MISSING");raise SystemExit(1)
  return json.loads(STATE.read_text())
 
-def fetch(host,start,end):
- u=host+"/fapi/v1/klines"
+def ws_klines(start,end):
+ print("WS API | CONNECT")
  try:
-  r=requests.get(u,params={
-   "symbol":S,"interval":"1h",
-   "startTime":int(start.timestamp()*1000),
-   "endTime":int(end.timestamp()*1000)-1,
-   "limit":1000
-  },timeout=15)
-  print("REST",host,r.status_code)
-  if r.status_code!=200:return []
-  a=r.json()
-  if not isinstance(a,list):return []
+  w=websocket.create_connection(WS,timeout=20)
+  p={
+   "id":"v438-backfill",
+   "method":"klines",
+   "params":{
+    "symbol":S,"interval":"1h",
+    "startTime":int(start.timestamp()*1000),
+    "endTime":int(end.timestamp()*1000)-1,
+    "limit":100
+   }
+  }
+  w.send(json.dumps(p))
+  r=json.loads(w.recv())
+  w.close()
+
+  print("WS API STATUS |",r.get("status"))
+  if r.get("status")!=200:
+   print("WS API ERROR |",r.get("error"))
+   return []
+
+  rows=r.get("result",[])
+  print("WS API KLINES |",len(rows))
+
   out=[]
-  for p in a:
+  for p in rows:
    try:
     t=datetime.fromtimestamp(int(p[0])/1000,timezone.utc)
     out.append({
-     "time":iso(t),"open":float(p[1]),"high":float(p[2]),
+     "time":iso(t),
+     "open":float(p[1]),"high":float(p[2]),
      "low":float(p[3]),"close":float(p[4]),
-     "volume":float(p[5]),"trades":int(p[8]),"closed":True
+     "volume":float(p[5]),"trades":int(p[8]),
+     "closed":True
     })
    except:pass
   return out
+
  except Exception as e:
-  print("REST ERROR",host,type(e).__name__)
+  print("WS API ERROR |",type(e).__name__,str(e))
   return []
 
 def save(s):
@@ -62,9 +71,9 @@ def save(s):
     ["time","open","high","low","close","volume","trades","closed"])+"\n")
 
 def main():
- print("V438.BACKFILL V2 | START")
- s=load()
+ print("V438.BACKFILL V3 | WS API")
 
+ s=load()
  cs={c["time"]:c for c in s.get("candles",[])}
  live=s.get("live")
 
@@ -90,29 +99,19 @@ def main():
   print("NOTHING TO BACKFILL")
   return
 
- start=dt(need[0])
- end=dt(need[-1])+timedelta(hours=1)
+ rows=ws_klines(dt(need[0]),dt(need[-1])+timedelta(hours=1))
+ found={x["time"]:x for x in rows if x["time"] in need}
 
- found={}
-
- for host in HOSTS:
-  if len(found)==len(need):break
-  rows=fetch(host,start,end)
-  for c in rows:
-   if c["time"] in need:
-    found[c["time"]]=c
-
- print("BACKFILL FOUND |",len(found))
+ print("FOUND |",len(found),"/",len(need))
 
  missing=[x for x in need if x not in found]
  if missing:
-  print("BACKFILL MISSING |",len(missing))
+  print("MISSING |",len(missing))
   for x in missing:print(" ",x)
   print("RESULT | BACKFILL INCOMPLETE")
   raise SystemExit(2)
 
  cs.update(found)
-
  if live:cs.pop(live["time"],None)
 
  vals=sorted(cs.values(),key=lambda x:x["time"])
@@ -121,31 +120,32 @@ def main():
  for a,b in zip(vals,vals[1:]):
   h=int((dt(b["time"])-dt(a["time"])).total_seconds()/3600)-1
   if h>0:
-   gaps.extend(
+   gaps += [
     iso(dt(a["time"])+timedelta(hours=i))
     for i in range(1,h+1)
-   )
+   ]
 
- gap_live=0
+ gap=0
  if live:
-  gap_live=max(0,int(
-   (dt(live["time"])-dt(vals[-1]["time"])).total_seconds()/3600)-1
-  )
+  gap=max(0,int(
+   (dt(live["time"])-dt(vals[-1]["time"])).total_seconds()/3600)-1)
 
- s["candles"]=vals
- s["last_closed"]=vals[-1]["time"]
- s["closed_count"]=len(vals)
- s["gaps"]=gaps
- s["gap_to_live_hours"]=gap_live
- s["warmup"]=not(len(vals)>=20 and not gaps and gap_live==0)
- s["continuous20"]=len(vals)>=20 and not gaps and gap_live==0
- s["updated"]=datetime.now(timezone.utc).isoformat()
+ s.update({
+  "candles":vals,
+  "last_closed":vals[-1]["time"],
+  "closed_count":len(vals),
+  "gaps":gaps,
+  "gap_to_live_hours":gap,
+  "warmup":not(len(vals)>=20 and not gaps and gap==0),
+  "continuous20":len(vals)>=20 and not gaps and gap==0,
+  "updated":datetime.now(timezone.utc).isoformat()
+ })
 
  save(s)
 
  print("CANDLES AFTER |",len(vals))
  print("GAPS INTERNAL |",len(gaps))
- print("GAP TO LIVE |",gap_live,"h")
+ print("GAP TO LIVE |",gap,"h")
  print("CONTINUOUS20 |",s["continuous20"])
  print("RESULT |","BACKFILL OK" if s["continuous20"]
        else "BACKFILL INCOMPLETE")
