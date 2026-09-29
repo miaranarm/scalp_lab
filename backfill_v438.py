@@ -1,153 +1,157 @@
-import json,time,requests
+import json,requests
 from pathlib import Path
 from datetime import datetime,timezone,timedelta
 
 S="SOLUSDT"
 STATE=Path("state/live_v438.json")
-OUT=Path("results/live_candles_v438.csv")
-TF=3600000
 
 def log(x): print(x,flush=True)
 
-def dt(ms):
-    return datetime.fromtimestamp(ms/1000,timezone.utc)
+def D(x):
+    return datetime.fromisoformat(x)
 
 def load():
-    if not STATE.exists(): return {},None
     s=json.loads(STATE.read_text())
-    return s.get("candles",{}),s.get("live")
+    old={}
 
-def save(old,live):
-    STATE.parent.mkdir(exist_ok=True)
-    STATE.write_text(json.dumps(
-        {"candles":old,"live":live},
-        indent=2,sort_keys=True
-    ))
+    def scan(x):
+        if isinstance(x,dict):
+            t=x.get("time")
+            if t and all(k in x for k in("open","high","low","close")):
+                old[t]=x
+            for v in x.values(): scan(v)
+        elif isinstance(x,list):
+            for v in x: scan(v)
 
-def api(url,p):
-    try:
-        r=requests.get(url,params=p,timeout=15)
-        log(f"API {r.status_code} | {url.split('/')[2]}")
-        if r.status_code==200:
-            return r.json()
-    except Exception as e:
-        log(f"API ERR | {type(e).__name__}")
+    scan(s)
+    live=s.get("live")
+    return old,live
+
+def get(a,b):
+    p={"symbol":S,"interval":"1h","startTime":a,
+       "endTime":b,"limit":1000}
+
+    for h in [
+        "fapi.binance.com",
+        "fapi1.binance.com",
+        "fapi2.binance.com",
+        "fapi3.binance.com",
+        "fapi4.binance.com"
+    ]:
+        try:
+            u=f"https://{h}/fapi/v1/klines"
+            r=requests.get(u,params=p,timeout=12)
+            log(f"API {r.status_code} | {h}")
+            if r.status_code==200:
+                return r.json()
+        except Exception as e:
+            log(f"ERR | {h} | {type(e).__name__}")
     return []
 
-def get_klines(a,b):
-    p={
-        "symbol":S,"interval":"1h",
-        "startTime":a,"endTime":b,
-        "limit":1000
-    }
-
-    hosts=[
-        "https://fapi.binance.com/fapi/v1/klines",
-        "https://fapi1.binance.com/fapi/v1/klines",
-        "https://fapi2.binance.com/fapi/v1/klines",
-        "https://fapi3.binance.com/fapi/v1/klines",
-        "https://fapi4.binance.com/fapi/v1/klines",
-    ]
-
-    for u in hosts:
-        x=api(u,p)
-        if x:
-            return x,"REST"
-
-    return [],None
-
-def normalize(rows):
-    out={}
-    for r in rows:
-        try:
-            t=int(r[0])
-            if len(r)<6: continue
-            out[dt(t).isoformat()]={
-                "time":dt(t).isoformat(),
-                "open":float(r[1]),
-                "high":float(r[2]),
-                "low":float(r[3]),
-                "close":float(r[4]),
-                "volume":float(r[5]),
-                "trades":int(r[8]) if len(r)>8 else 0,
-                "closed":True
-            }
-        except: pass
-    return out
-
 def main():
-    log("V438.BACKFILL | START")
+    log("V438.BACKFILL V2 | START")
+
+    if not STATE.exists():
+        log("STATE MISSING")
+        return
 
     old,live=load()
+
+    log(f"FOUND CANDLES | {len(old)}")
 
     if not old:
         log("NO HISTORY")
         return
 
-    times=sorted(old)
-    last=datetime.fromisoformat(times[-1])
-    log(f"LAST CLOSED | {last.isoformat()}")
+    ts=sorted(old)
+    last=D(ts[-1])
 
     if not live:
         log("NO LIVE")
         return
 
-    lt=datetime.fromisoformat(live["time"])
+    lt=D(live["time"])
+
+    log(f"LAST | {last.isoformat()}")
     log(f"LIVE | {lt.isoformat()}")
 
-    missing=[]
+    miss=[]
     t=last+timedelta(hours=1)
 
     while t<lt:
         if t.isoformat() not in old:
-            missing.append(t)
+            miss.append(t)
         t+=timedelta(hours=1)
 
-    log(f"MISSING | {len(missing)}")
+    log(f"MISSING | {len(miss)}")
 
-    if not missing:
+    if not miss:
         log("BACKFILL | NOTHING")
         return
 
-    a=int(missing[0].timestamp()*1000)
-    b=int((missing[-1]+timedelta(hours=1)).timestamp()*1000)-1
+    a=int(miss[0].timestamp()*1000)
+    b=int((miss[-1]+timedelta(hours=1)).timestamp()*1000)-1
 
-    log(f"REQUEST | {missing[0].isoformat()} -> {missing[-1].isoformat()}")
-
-    rows,src=get_klines(a,b)
+    rows=get(a,b)
 
     if not rows:
         log("BACKFILL | NO DATA")
         return
 
-    got=normalize(rows)
-    log(f"BACKFILL | {len(got)} CANDLES | {src}")
-
     n=0
-    for t in missing:
-        k=t.isoformat()
-        if k in got:
-            old[k]=got[k]
-            n+=1
+    for r in rows:
+        try:
+            t=datetime.fromtimestamp(int(r[0])/1000,timezone.utc).isoformat()
+            if t in {x.isoformat() for x in miss}:
+                old[t]={
+                    "time":t,
+                    "open":float(r[1]),
+                    "high":float(r[2]),
+                    "low":float(r[3]),
+                    "close":float(r[4]),
+                    "volume":float(r[5]),
+                    "trades":int(r[8]),
+                    "closed":True
+                }
+                n+=1
+        except:
+            pass
 
-    save(old,live)
+    log(f"FILLED | {n}/{len(miss)}")
 
-    times=sorted(old)
+    if n:
+        s=json.loads(STATE.read_text())
+
+        def put(x):
+            if isinstance(x,dict):
+                for k,v in list(x.items()):
+                    if k=="live": continue
+                    if isinstance(v,dict) and v.get("time") in old:
+                        continue
+                    put(v)
+            elif isinstance(x,list):
+                x[:]=[v for v in x if not(
+                    isinstance(v,dict) and v.get("time") in old
+                )]
+
+        # conserver la structure 6f et ajouter l'historique
+        s["backfill"]=old
+        STATE.write_text(json.dumps(s,indent=2))
+
+    allts=sorted(old)
     gaps=0
-    for a,b in zip(times,times[1:]):
-        x=datetime.fromisoformat(a)
-        y=datetime.fromisoformat(b)
+
+    for a,b in zip(allts,allts[1:]):
+        x=D(a);y=D(b)
         gaps+=max(0,int((y-x).total_seconds()/3600)-1)
 
-    last=datetime.fromisoformat(times[-1])
-    lt=datetime.fromisoformat(live["time"])
+    last=D(allts[-1])
     gap=max(0,int((lt-last).total_seconds()/3600)-1)
 
-    log(f"FILLED | {n}/{len(missing)}")
+    log(f"TOTAL | {len(allts)}")
     log(f"GAPS INTERNAL | {gaps}")
     log(f"GAP TO LIVE | {gap}h")
-    log(f"CLOSED | {len(times)}")
-    log(f"CONTINUOUS20 | {gaps==0 and gap==0 and len(times)>=20}")
+    log(f"CONTINUOUS20 | {gaps==0 and gap==0 and len(allts)>=20}")
 
 if __name__=="__main__":
     main()
