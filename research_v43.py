@@ -2,15 +2,16 @@
 SCALP LAB V4.3
 Research-only walk-forward engine.
 
-V4.3 changes versus V4.2
--------------------------
-1. Every fixed configuration is evaluated on every WF fold.
-2. Robustness is calculated from the complete OOS matrix.
-3. Training winner is stored separately in selected_v43.csv.
-4. Simulations are cached once per configuration.
-5. Random benchmark is disabled by default.
-6. Explicit progress logging is emitted throughout the run.
-7. No deployment / live trading.
+V4.3
+----
+- Every fixed configuration is evaluated on every WF fold.
+- Robustness is calculated from the complete OOS matrix.
+- Training winners are stored separately.
+- Simulations are cached once per configuration.
+- Random benchmark disabled by default.
+- Explicit progress logging.
+- Binance Futures Vision data only.
+- No live trading.
 """
 
 from __future__ import annotations
@@ -18,12 +19,10 @@ from __future__ import annotations
 import argparse
 import io
 import math
-import os
 import random
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
@@ -80,10 +79,7 @@ MIN_RANDOM = 0.50
 MIN_PF = 1.0
 MIN_EDGE = 0.0
 
-# V4.3 first diagnostic run:
-# keep this at 0.
 RANDOM_RUNS = 0
-
 MC_RUNS = 0
 
 SEED = 20260928
@@ -102,23 +98,23 @@ WARM = {
 
 
 # ============================================================
-# DATA STRUCTURES
+# DATA STRUCTURE
 # ============================================================
 
 @dataclass
 class Candidate:
     name: str
-    signal: dict
+    signal: pd.Series
     regime: str
 
 
 # ============================================================
-# GENERAL HELPERS
+# HELPERS
 # ============================================================
 
 def finite(x):
     try:
-        return np.isfinite(float(x))
+        return bool(np.isfinite(float(x)))
     except Exception:
         return False
 
@@ -131,19 +127,29 @@ def safe_float(x, default=np.nan):
         return default
 
 
-def fmt_pct(x):
-    if not finite(x):
-        return "nan"
-    return f"{float(x) * 100:.3f}%"
-
-
 # ============================================================
-# BINANCE VISION DATA
+# BINANCE VISION
 # ============================================================
 
 def month_range(start, end):
-    cur = pd.Timestamp(start).to_period("M")
-    last = pd.Timestamp(end).to_period("M")
+    """
+    Generate YYYY/MM without timezone warnings.
+    """
+
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+
+    cur = pd.Period(
+        year=start_ts.year,
+        month=start_ts.month,
+        freq="M",
+    )
+
+    last = pd.Period(
+        year=end_ts.year,
+        month=end_ts.month,
+        freq="M",
+    )
 
     while cur <= last:
         yield cur.year, cur.month
@@ -151,9 +157,6 @@ def month_range(start, end):
 
 
 def fetch_month(symbol, interval, year, month):
-    """
-    Binance Futures Vision monthly archive.
-    """
     url = (
         f"{BASE}/monthly/klines/"
         f"{symbol}/{interval}/"
@@ -163,7 +166,9 @@ def fetch_month(symbol, interval, year, month):
     r = requests.get(
         url,
         timeout=60,
-        headers={"User-Agent": "scalp-lab-v43"},
+        headers={
+            "User-Agent": "scalp-lab-v43",
+        },
     )
 
     if r.status_code == 404:
@@ -171,11 +176,18 @@ def fetch_month(symbol, interval, year, month):
 
     r.raise_for_status()
 
-    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+    with zipfile.ZipFile(
+        io.BytesIO(r.content)
+    ) as z:
+
         names = z.namelist()
 
         csv_name = next(
-            (n for n in names if n.lower().endswith(".csv")),
+            (
+                n
+                for n in names
+                if n.lower().endswith(".csv")
+            ),
             None,
         )
 
@@ -183,17 +195,28 @@ def fetch_month(symbol, interval, year, month):
             return None
 
         with z.open(csv_name) as f:
-            df = pd.read_csv(f, header=None)
+            df = pd.read_csv(
+                f,
+                header=None,
+            )
 
     return df
 
 
 def fetch(symbol, interval, days):
     """
-    Download Binance Futures Vision monthly files.
+    Fetch Binance Futures Vision monthly archives.
     """
-    end = pd.Timestamp.now(tz="UTC").floor("h")
-    start = end - pd.Timedelta(days=days)
+
+    end = (
+        pd.Timestamp.now(tz="UTC")
+        .floor("h")
+    )
+
+    start = (
+        end
+        - pd.Timedelta(days=days)
+    )
 
     print(
         f"[{symbol}] DATA {interval} "
@@ -203,7 +226,10 @@ def fetch(symbol, interval, days):
 
     frames = []
 
-    for year, month in month_range(start, end):
+    for year, month in month_range(
+        start,
+        end,
+    ):
 
         print(
             f"[{symbol}] download "
@@ -212,6 +238,7 @@ def fetch(symbol, interval, days):
         )
 
         try:
+
             x = fetch_month(
                 symbol,
                 interval,
@@ -223,15 +250,17 @@ def fetch(symbol, interval, days):
                 frames.append(x)
 
         except Exception as e:
+
             print(
                 f"[{symbol}] archive error "
-                f"{year}-{month:02d}: {e}",
+                f"{year:04d}-{month:02d}: {e}",
                 flush=True,
             )
 
     if not frames:
         raise RuntimeError(
-            f"No Binance Vision data for {symbol} {interval}"
+            f"No Binance Vision data "
+            f"for {symbol} {interval}"
         )
 
     df = pd.concat(
@@ -239,7 +268,6 @@ def fetch(symbol, interval, days):
         ignore_index=True,
     )
 
-    # Binance kline schema
     cols = [
         "open_time",
         "open",
@@ -256,22 +284,30 @@ def fetch(symbol, interval, days):
     ]
 
     if len(df.columns) >= len(cols):
-        df = df.iloc[:, :len(cols)]
+        df = df.iloc[
+            :,
+            :len(cols),
+        ]
+
         df.columns = cols
 
     df["time"] = pd.to_datetime(
-        pd.to_numeric(df["open_time"], errors="coerce"),
+        pd.to_numeric(
+            df["open_time"],
+            errors="coerce",
+        ),
         unit="ms",
         utc=True,
     )
 
-    for c in [
+    for c in (
         "open",
         "high",
         "low",
         "close",
         "volume",
-    ]:
+    ):
+
         df[c] = pd.to_numeric(
             df[c],
             errors="coerce",
@@ -296,7 +332,8 @@ def fetch(symbol, interval, days):
     ]
 
     df = (
-        df.sort_values("time")
+        df
+        .sort_values("time")
         .drop_duplicates("time")
         .reset_index(drop=True)
     )
@@ -310,7 +347,7 @@ def fetch(symbol, interval, days):
 
 
 # ============================================================
-# FEATURES
+# INDICATORS
 # ============================================================
 
 def atr(df, n=14):
@@ -338,8 +375,13 @@ def atr(df, n=14):
 def rsi(series, n=14):
     d = series.diff()
 
-    up = d.clip(lower=0)
-    dn = -d.clip(upper=0)
+    up = d.clip(
+        lower=0
+    )
+
+    dn = -d.clip(
+        upper=0
+    )
 
     au = up.ewm(
         alpha=1 / n,
@@ -353,17 +395,34 @@ def rsi(series, n=14):
         min_periods=n,
     ).mean()
 
-    rs = au / ad.replace(0, np.nan)
+    rs = (
+        au
+        / ad.replace(
+            0,
+            np.nan,
+        )
+    )
 
-    return 100 - 100 / (1 + rs)
+    return (
+        100
+        - 100 / (1 + rs)
+    )
 
 
 def rolling_vwap(df, n):
-    pv = df["close"] * df["volume"]
+    pv = (
+        df["close"]
+        * df["volume"]
+    )
 
     return (
-        pv.rolling(n, min_periods=n).sum()
-        / df["volume"].rolling(
+        pv.rolling(
+            n,
+            min_periods=n,
+        ).sum()
+        /
+        df["volume"]
+        .rolling(
             n,
             min_periods=n,
         ).sum()
@@ -381,13 +440,22 @@ def zscore(series, n):
         min_periods=n,
     ).std()
 
-    return (series - mean) / std.replace(0, np.nan)
+    return (
+        (series - mean)
+        / std.replace(
+            0,
+            np.nan,
+        )
+    )
 
 
 def donchian_high(df, n):
     return (
         df["high"]
-        .rolling(n, min_periods=n)
+        .rolling(
+            n,
+            min_periods=n,
+        )
         .max()
         .shift(1)
     )
@@ -396,7 +464,10 @@ def donchian_high(df, n):
 def donchian_low(df, n):
     return (
         df["low"]
-        .rolling(n, min_periods=n)
+        .rolling(
+            n,
+            min_periods=n,
+        )
         .min()
         .shift(1)
     )
@@ -405,49 +476,82 @@ def donchian_low(df, n):
 def features(df):
     x = df.copy()
 
-    x["atr14"] = atr(x, 14)
+    x["atr14"] = atr(
+        x,
+        14,
+    )
 
-    x["ema20"] = x["close"].ewm(
-        span=20,
-        adjust=False,
-    ).mean()
+    x["ema20"] = (
+        x["close"]
+        .ewm(
+            span=20,
+            adjust=False,
+        )
+        .mean()
+    )
 
-    x["ema50"] = x["close"].ewm(
-        span=50,
-        adjust=False,
-    ).mean()
+    x["ema50"] = (
+        x["close"]
+        .ewm(
+            span=50,
+            adjust=False,
+        )
+        .mean()
+    )
 
-    x["ema200"] = x["close"].ewm(
-        span=200,
-        adjust=False,
-    ).mean()
+    x["ema200"] = (
+        x["close"]
+        .ewm(
+            span=200,
+            adjust=False,
+        )
+        .mean()
+    )
 
     x["rsi14"] = rsi(
         x["close"],
         14,
     )
 
-    for n in (48, 96):
-        x[f"vwap{n}"] = rolling_vwap(
-            x,
-            n,
+    for n in (
+        48,
+        96,
+    ):
+
+        x[f"vwap{n}"] = (
+            rolling_vwap(
+                x,
+                n,
+            )
         )
 
-    for n in (30, 60):
+    for n in (
+        30,
+        60,
+    ):
+
         x[f"z{n}"] = zscore(
             x["close"],
             n,
         )
 
-    for n in (20, 50):
-        x[f"dh{n}"] = donchian_high(
-            x,
-            n,
+    for n in (
+        20,
+        50,
+    ):
+
+        x[f"dh{n}"] = (
+            donchian_high(
+                x,
+                n,
+            )
         )
 
-        x[f"dl{n}"] = donchian_low(
-            x,
-            n,
+        x[f"dl{n}"] = (
+            donchian_low(
+                x,
+                n,
+            )
         )
 
     return x
@@ -459,32 +563,52 @@ def features(df):
 
 def context(entry, higher, iv):
     """
-    Align closed higher-timeframe candles with entry candles.
+    Align closed higher-timeframe candles.
+
+    Important:
+    higher timeframe columns are explicitly renamed
+    BEFORE merge_asof().
+
+    This avoids pandas suffix ambiguity and fixes:
+        KeyError: 'ema20_ctx'
     """
 
     ctx = higher.copy()
 
-    ctx["ema20"] = ctx["close"].ewm(
-        span=20,
-        adjust=False,
-    ).mean()
+    ctx["ema20"] = (
+        ctx["close"]
+        .ewm(
+            span=20,
+            adjust=False,
+        )
+        .mean()
+    )
 
-    ctx["ema50"] = ctx["close"].ewm(
-        span=50,
-        adjust=False,
-    ).mean()
+    ctx["ema50"] = (
+        ctx["close"]
+        .ewm(
+            span=50,
+            adjust=False,
+        )
+        .mean()
+    )
 
-    ctx["ema200"] = ctx["close"].ewm(
-        span=200,
-        adjust=False,
-    ).mean()
+    ctx["ema200"] = (
+        ctx["close"]
+        .ewm(
+            span=200,
+            adjust=False,
+        )
+        .mean()
+    )
 
     ctx["atr14"] = atr(
         ctx,
         14,
     )
 
-    # Context candle is usable only after it has closed.
+    # The 4H candle becomes available
+    # only after its close.
     ctx["time"] = (
         ctx["time"]
         + pd.to_timedelta(
@@ -502,21 +626,44 @@ def context(entry, higher, iv):
             "ema200",
             "atr14",
         ]
-    ].sort_values("time")
+    ].copy()
+
+    ctx = ctx.rename(
+        columns={
+            "close": "close_ctx",
+            "ema20": "ema20_ctx",
+            "ema50": "ema50_ctx",
+            "ema200": "ema200_ctx",
+            "atr14": "atr14_ctx",
+        }
+    )
+
+    ctx = (
+        ctx
+        .sort_values("time")
+        .reset_index(drop=True)
+    )
+
+    entry_sorted = (
+        entry
+        .sort_values("time")
+        .copy()
+    )
 
     out = pd.merge_asof(
-        entry.sort_values("time"),
+        entry_sorted,
         ctx,
         on="time",
         direction="backward",
-        suffixes=("", "_ctx"),
     )
 
     out["trend"] = np.where(
-        out["ema20_ctx"] > out["ema50_ctx"],
+        out["ema20_ctx"]
+        > out["ema50_ctx"],
         1,
         np.where(
-            out["ema20_ctx"] < out["ema50_ctx"],
+            out["ema20_ctx"]
+            < out["ema50_ctx"],
             -1,
             0,
         ),
@@ -526,10 +673,11 @@ def context(entry, higher, iv):
 
 
 # ============================================================
-# SIGNALS
+# SIGNAL
 # ============================================================
 
 def signal(df, spec):
+
     kind = spec["kind"]
 
     close = df["close"]
@@ -546,29 +694,54 @@ def signal(df, spec):
         n = spec["n"]
         k = spec["k"]
 
-        v = df[f"vwap{n}"]
+        v = df[
+            f"vwap{n}"
+        ]
 
         dist = (
-            (close - v)
-            / atr14.replace(0, np.nan)
+            (
+                close - v
+            )
+            /
+            atr14.replace(
+                0,
+                np.nan,
+            )
         )
 
-        s.loc[dist < -k] = 1
-        s.loc[dist > k] = -1
+        s.loc[
+            dist < -k
+        ] = 1
+
+        s.loc[
+            dist > k
+        ] = -1
 
     elif kind == "donchian":
 
         n = spec["n"]
         vol = spec["vol"]
 
-        hi = df[f"dh{n}"]
-        lo = df[f"dl{n}"]
+        hi = df[
+            f"dh{n}"
+        ]
+
+        lo = df[
+            f"dl{n}"
+        ]
 
         if vol == 0:
-            long_cond = close > hi
-            short_cond = close < lo
+
+            long_cond = (
+                close > hi
+            )
+
+            short_cond = (
+                close < lo
+            )
 
         else:
+
             atr_pct = (
                 atr14
                 / close
@@ -576,55 +749,103 @@ def signal(df, spec):
 
             long_cond = (
                 (close > hi)
-                & (atr_pct >= vol / 10000)
+                &
+                (
+                    atr_pct
+                    >= vol / 10000
+                )
             )
 
             short_cond = (
                 (close < lo)
-                & (atr_pct >= vol / 10000)
+                &
+                (
+                    atr_pct
+                    >= vol / 10000
+                )
             )
 
-        s.loc[long_cond] = 1
-        s.loc[short_cond] = -1
+        s.loc[
+            long_cond
+        ] = 1
+
+        s.loc[
+            short_cond
+        ] = -1
 
     elif kind == "zscore":
 
         n = spec["n"]
         threshold = spec["thr"]
 
-        z = df[f"z{n}"]
+        z = df[
+            f"z{n}"
+        ]
 
-        s.loc[z < -threshold] = 1
-        s.loc[z > threshold] = -1
+        s.loc[
+            z < -threshold
+        ] = 1
+
+        s.loc[
+            z > threshold
+        ] = -1
 
     elif kind == "pullback":
 
         level = spec["rsi"]
 
         s.loc[
-            (df["rsi14"] < level)
-            & (close > df["ema20"])
+            (
+                df["rsi14"]
+                < level
+            )
+            &
+            (
+                close
+                > df["ema20"]
+            )
         ] = 1
 
         s.loc[
-            (df["rsi14"] > 100 - level)
-            & (close < df["ema20"])
+            (
+                df["rsi14"]
+                > 100 - level
+            )
+            &
+            (
+                close
+                < df["ema20"]
+            )
         ] = -1
 
     elif kind == "breakout":
 
         n = spec["n"]
 
-        hi = df[f"dh{n}"]
-        lo = df[f"dl{n}"]
+        hi = df[
+            f"dh{n}"
+        ]
 
-        s.loc[close > hi] = 1
-        s.loc[close < lo] = -1
+        lo = df[
+            f"dl{n}"
+        ]
+
+        s.loc[
+            close > hi
+        ] = 1
+
+        s.loc[
+            close < lo
+        ] = -1
 
     return s
 
 
-def apply_regime(df, s, regime):
+def apply_regime(
+    df,
+    s,
+    regime,
+):
     out = s.copy()
 
     if regime == "all":
@@ -633,15 +854,25 @@ def apply_regime(df, s, regime):
     trend = df["trend"]
 
     if regime == "trend":
+
         out.loc[
             ~(
-                ((out == 1) & (trend == 1))
+                (
+                    (out == 1)
+                    &
+                    (trend == 1)
+                )
                 |
-                ((out == -1) & (trend == -1))
+                (
+                    (out == -1)
+                    &
+                    (trend == -1)
+                )
             )
         ] = 0
 
     elif regime == "range":
+
         out.loc[
             trend != 0
         ] = 0
@@ -653,11 +884,19 @@ def apply_regime(df, s, regime):
 # CANDIDATES
 # ============================================================
 
-def candidates(entry, higher, iv):
+def candidates(
+    entry,
+    higher,
+    iv,
+):
+
     df = context(
         entry,
         higher,
-        CTX.get(iv, "1h"),
+        CTX.get(
+            iv,
+            "1h",
+        ),
     )
 
     df = features(df)
@@ -773,13 +1012,13 @@ def candidates(entry, higher, iv):
                 regime,
             )
 
-            c = Candidate(
-                name=name,
-                signal=ss,
-                regime=regime,
+            result.append(
+                Candidate(
+                    name=name,
+                    signal=ss,
+                    regime=regime,
+                )
             )
-
-            result.append(c)
 
     return df, result
 
@@ -797,43 +1036,61 @@ def simulate(
     profile,
     slip,
 ):
-    """
-    Signal on closed candle.
-    Entry next candle.
-
-    Priority:
-        SL before TP when both touched
-        in same candle.
-
-    No funding.
-    No orderbook.
-    No latency.
-    """
 
     if df.empty:
         return []
 
-    c = df["close"].to_numpy(dtype=float)
-    h = df["high"].to_numpy(dtype=float)
-    l = df["low"].to_numpy(dtype=float)
+    c = df[
+        "close"
+    ].to_numpy(
+        dtype=float
+    )
 
-    a = df["atr14"].to_numpy(dtype=float)
-    s = sig.to_numpy(dtype=np.int8)
+    h = df[
+        "high"
+    ].to_numpy(
+        dtype=float
+    )
 
-    times = df["time"].to_numpy()
+    l = df[
+        "low"
+    ].to_numpy(
+        dtype=float
+    )
+
+    a = df[
+        "atr14"
+    ].to_numpy(
+        dtype=float
+    )
+
+    s = sig.to_numpy(
+        dtype=np.int8
+    )
+
+    times = (
+        df["time"]
+        .to_numpy()
+    )
 
     trades = []
 
     n = len(df)
 
-    for i in range(n - 1):
+    for i in range(
+        n - 1
+    ):
 
-        side = int(s[i])
+        side = int(
+            s[i]
+        )
 
         if side == 0:
             continue
 
-        if not np.isfinite(c[i]):
+        if not finite(
+            c[i]
+        ):
             continue
 
         entry_idx = i + 1
@@ -843,151 +1100,242 @@ def simulate(
 
         entry = c[i]
 
-        if not np.isfinite(entry):
+        entry_time = pd.Timestamp(
+            times[entry_idx]
+        )
+
+        if not finite(entry):
             continue
 
-        ef = FT
+        entry_fee = FT
 
         # ----------------------------------------------------
-        # Approximate maker fill
+        # Maker approximation
         # ----------------------------------------------------
-        if profile in ("maker_tp", "maker_both"):
+
+        if profile in (
+            "maker_tp",
+            "maker_both",
+        ):
 
             if side == 1:
 
-                if l[entry_idx] > c[i] * (1 - TH):
+                if (
+                    l[entry_idx]
+                    >
+                    c[i]
+                    * (1 - TH)
+                ):
                     continue
 
             else:
 
-                if h[entry_idx] < c[i] * (1 + TH):
+                if (
+                    h[entry_idx]
+                    <
+                    c[i]
+                    * (1 + TH)
+                ):
                     continue
 
             entry = c[i]
-            ef = FM
+            entry_fee = FM
 
         else:
 
             entry = c[entry_idx]
-            ef = FT
+            entry_fee = FT
 
-        if not np.isfinite(entry) or entry <= 0:
+        if (
+            not finite(entry)
+            or entry <= 0
+        ):
             continue
 
         atr_value = a[i]
 
-        if not np.isfinite(atr_value) or atr_value <= 0:
+        if (
+            not finite(atr_value)
+            or atr_value <= 0
+        ):
             continue
 
         distance = atr_value
 
         if side == 1:
 
-            tp_price = entry + tp * distance
-            sl_price = entry - sl * distance
+            tp_price = (
+                entry
+                + tp * distance
+            )
+
+            sl_price = (
+                entry
+                - sl * distance
+            )
 
         else:
 
-            tp_price = entry - tp * distance
-            sl_price = entry + sl * distance
+            tp_price = (
+                entry
+                - tp * distance
+            )
 
-        exit_idx = min(
+            sl_price = (
+                entry
+                + sl * distance
+            )
+
+        final_idx = min(
             entry_idx + hold,
             n - 1,
         )
 
-        exit_price = c[exit_idx]
+        exit_idx = final_idx
+        exit_price = c[
+            final_idx
+        ]
+
         exit_reason = "TIME"
-        xf = FT
+        exit_fee = FT
 
         for j in range(
             entry_idx,
-            exit_idx + 1,
+            final_idx + 1,
         ):
 
             if side == 1:
 
-                hit_sl = l[j] <= sl_price
-                hit_tp = h[j] >= tp_price
+                hit_sl = (
+                    l[j]
+                    <= sl_price
+                )
+
+                hit_tp = (
+                    h[j]
+                    >= tp_price
+                )
 
             else:
 
-                hit_sl = h[j] >= sl_price
-                hit_tp = l[j] <= tp_price
+                hit_sl = (
+                    h[j]
+                    >= sl_price
+                )
 
+                hit_tp = (
+                    l[j]
+                    <= tp_price
+                )
+
+            # Conservative priority:
+            # SL if both TP and SL happen
+            # inside the same candle.
             if hit_sl and hit_tp:
-                # Conservative priority.
+
+                exit_idx = j
                 exit_price = sl_price
                 exit_reason = "SL"
                 break
 
             if hit_sl:
+
+                exit_idx = j
                 exit_price = sl_price
                 exit_reason = "SL"
                 break
 
             if hit_tp:
+
+                exit_idx = j
                 exit_price = tp_price
                 exit_reason = "TP"
 
-                if profile == "maker_tp":
-                    xf = FM
-                elif profile == "maker_both":
-                    xf = FM
+                if profile in (
+                    "maker_tp",
+                    "maker_both",
+                ):
+                    exit_fee = FM
+                else:
+                    exit_fee = FT
 
                 break
 
-        # ----------------------------------------------------
-        # Gross return
-        # ----------------------------------------------------
         if side == 1:
+
             gross = (
                 exit_price / entry
             ) - 1
+
         else:
+
             gross = (
                 entry / exit_price
             ) - 1
 
-        # Approximate total costs:
-        # entry fee + exit fee + slippage
-        total_fee = ef + xf
+        total_fee = (
+            entry_fee
+            + exit_fee
+        )
 
-        net = gross - total_fee - slip
+        net = (
+            gross
+            - total_fee
+            - slip
+        )
 
         trades.append({
-            "entry_time": pd.Timestamp(
-                times[entry_idx]
-            ),
-            "exit_time": pd.Timestamp(
-                times[
-                    min(
-                        j if 'j' in locals() else exit_idx,
-                        n - 1,
-                    )
-                ]
-            ),
-            "side": side,
-            "entry": entry,
-            "exit": exit_price,
-            "gross": gross,
-            "net": net,
-            "reason": exit_reason,
+            "entry_time":
+                entry_time,
+
+            "exit_time":
+                pd.Timestamp(
+                    times[exit_idx]
+                ),
+
+            "side":
+                side,
+
+            "entry":
+                float(entry),
+
+            "exit":
+                float(exit_price),
+
+            "gross":
+                float(gross),
+
+            "net":
+                float(net),
+
+            "reason":
+                exit_reason,
         })
 
     return trades
 
 
-def inside(trades, start, end):
+def inside(
+    trades,
+    start,
+    end,
+):
+
     if not trades:
         return []
 
+    start = pd.Timestamp(start)
+    end = pd.Timestamp(end)
+
     return [
-        t for t in trades
+        t
+        for t in trades
         if (
-            pd.Timestamp(start)
-            <= pd.Timestamp(t["entry_time"])
-            < pd.Timestamp(end)
+            start
+            <= pd.Timestamp(
+                t["entry_time"]
+            )
+            < end
         )
     ]
 
@@ -1011,10 +1359,13 @@ def empty_stats():
 
 
 def stats(trades):
+
     if not trades:
         return empty_stats()
 
-    x = pd.DataFrame(trades)
+    x = pd.DataFrame(
+        trades
+    )
 
     if x.empty:
         return empty_stats()
@@ -1027,39 +1378,87 @@ def stats(trades):
     if r.empty:
         return empty_stats()
 
-    wins = r[r > 0]
-    losses = r[r < 0]
+    wins = r[
+        r > 0
+    ]
 
-    gross_profit = wins.sum()
-    gross_loss = -losses.sum()
+    losses = r[
+        r < 0
+    ]
+
+    gross_profit = (
+        wins.sum()
+    )
+
+    gross_loss = (
+        -losses.sum()
+    )
 
     if gross_loss > 0:
-        pf = gross_profit / gross_loss
+
+        pf = (
+            gross_profit
+            / gross_loss
+        )
+
+    elif gross_profit > 0:
+
+        pf = np.inf
+
     else:
-        pf = np.inf if gross_profit > 0 else np.nan
 
-    equity = (1 + r).cumprod()
+        pf = np.nan
 
-    peak = equity.cummax()
+    equity = (
+        1 + r
+    ).cumprod()
+
+    peak = (
+        equity
+        .cummax()
+    )
 
     dd = (
         equity / peak
         - 1
     ).min()
 
-    # Simple mean edge per trade.
     edge = r.mean()
 
     return {
-        "n": int(len(r)),
-        "mean": float(r.mean()),
-        "median": float(r.median()),
-        "pf": float(pf),
-        "edge": float(edge),
-        "return": float(equity.iloc[-1] - 1),
-        "dd": float(dd),
-        "wins": int((r > 0).sum()),
-        "losses": int((r < 0).sum()),
+        "n":
+            int(len(r)),
+
+        "mean":
+            float(r.mean()),
+
+        "median":
+            float(r.median()),
+
+        "pf":
+            float(pf),
+
+        "edge":
+            float(edge),
+
+        "return":
+            float(
+                equity.iloc[-1]
+                - 1
+            ),
+
+        "dd":
+            float(dd),
+
+        "wins":
+            int(
+                (r > 0).sum()
+            ),
+
+        "losses":
+            int(
+                (r < 0).sum()
+            ),
     }
 
 
@@ -1068,29 +1467,35 @@ def stats(trades):
 # ============================================================
 
 def score(st):
+
     n = st["n"]
 
     if n < MIN_TRAIN:
         return -np.inf
 
-    if not finite(st["mean"]):
+    if not finite(
+        st["mean"]
+    ):
         return -np.inf
 
-    if not finite(st["pf"]):
+    if not finite(
+        st["pf"]
+    ):
         return -np.inf
 
-    if not finite(st["dd"]):
+    if not finite(
+        st["dd"]
+    ):
         return -np.inf
 
-    # Keep the original philosophy:
-    # reward average return and PF,
-    # penalize drawdown,
-    # require sufficient sample size.
-    #
-    # This is only TRAIN selection.
     return (
         st["mean"] * 1000
-        + math.log1p(max(st["pf"], 0))
+        + math.log1p(
+            max(
+                st["pf"],
+                0,
+            )
+        )
         + st["dd"] * 2
     )
 
@@ -1104,6 +1509,7 @@ def mc(
     runs=5000,
     seed=SEED,
 ):
+
     if runs <= 0:
         return {}
 
@@ -1114,7 +1520,9 @@ def mc(
         [
             float(t["net"])
             for t in trades
-            if finite(t["net"])
+            if finite(
+                t["net"]
+            )
         ],
         dtype=float,
     )
@@ -1122,7 +1530,9 @@ def mc(
     if len(r) < 20:
         return {}
 
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(
+        seed
+    )
 
     finals = []
 
@@ -1148,10 +1558,35 @@ def mc(
     )
 
     return {
-        "mean": float(np.mean(finals) - 1),
-        "median": float(np.median(finals) - 1),
-        "p05": float(np.percentile(finals, 5) - 1),
-        "p95": float(np.percentile(finals, 95) - 1),
+        "mean":
+            float(
+                np.mean(finals)
+                - 1
+            ),
+
+        "median":
+            float(
+                np.median(finals)
+                - 1
+            ),
+
+        "p05":
+            float(
+                np.percentile(
+                    finals,
+                    5,
+                )
+                - 1
+            ),
+
+        "p95":
+            float(
+                np.percentile(
+                    finals,
+                    95,
+                )
+                - 1
+            ),
     }
 
 
@@ -1168,22 +1603,19 @@ def random_mc(
     runs,
     seed,
 ):
-    """
-    Random-side benchmark.
-
-    It preserves the signal event timestamps but randomly
-    assigns long/short directions.
-    """
 
     if runs <= 0:
         return {}
 
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(
+        seed
+    )
 
     sig0 = sig.copy()
 
     active = np.flatnonzero(
-        sig0.to_numpy() != 0
+        sig0.to_numpy()
+        != 0
     )
 
     if len(active) < 20:
@@ -1193,22 +1625,23 @@ def random_mc(
 
     for _ in range(runs):
 
-        rs = sig0.copy()
-
-        signs = rng.choice(
-            np.array([-1, 1], dtype=np.int8),
-            size=len(active),
+        arr = sig0.to_numpy(
+            copy=True
         )
 
-        arr = rs.to_numpy(
-            copy=True
+        signs = rng.choice(
+            np.array(
+                [-1, 1],
+                dtype=np.int8,
+            ),
+            size=len(active),
         )
 
         arr[active] = signs
 
         random_signal = pd.Series(
             arr,
-            index=rs.index,
+            index=sig0.index,
         )
 
         tr = simulate(
@@ -1232,41 +1665,63 @@ def random_mc(
         if st["n"] > 0:
 
             results.append({
-                "mean": st["mean"],
-                "pf": st["pf"],
-                "edge": st["edge"],
+                "mean":
+                    st["mean"],
+
+                "pf":
+                    st["pf"],
+
+                "edge":
+                    st["edge"],
             })
 
     if not results:
         return {}
 
-    x = pd.DataFrame(results)
+    x = pd.DataFrame(
+        results
+    )
 
     return {
-        "mean": float(x["mean"].mean()),
-        "median": float(x["mean"].median()),
-        "pf": float(x["pf"].median()),
-        "edge": float(x["edge"].median()),
+        "mean":
+            float(
+                x["mean"].mean()
+            ),
+
+        "median":
+            float(
+                x["mean"].median()
+            ),
+
+        "pf":
+            float(
+                x["pf"].median()
+            ),
+
+        "edge":
+            float(
+                x["edge"].median()
+            ),
     }
 
 
 # ============================================================
-# FIXED / BUY & HOLD
+# BUY AND HOLD
 # ============================================================
 
 def fixed(trades):
-    st = stats(trades)
-
-    return st
+    return stats(trades)
 
 
 def buyhold(df):
+
     if df.empty:
         return np.nan
 
     r = (
         df["close"].iloc[-1]
-        / df["close"].iloc[0]
+        /
+        df["close"].iloc[0]
         - 1
     )
 
@@ -1278,52 +1733,64 @@ def buyhold(df):
 
 
 # ============================================================
-# WALK-FORWARD FOLDS
+# WALK FORWARD FOLDS
 # ============================================================
 
 def folds(
     start,
     end,
 ):
-    """
-    TRAIN / TEST rolling walk-forward.
 
-    Durations are expressed in days.
-    """
+    start = pd.Timestamp(start)
+    end = pd.Timestamp(end)
 
-    start = pd.Timestamp(
-        start,
-        tz="UTC",
+    if start.tzinfo is None:
+        start = start.tz_localize(
+            "UTC"
+        )
+
+    if end.tzinfo is None:
+        end = end.tz_localize(
+            "UTC"
+        )
+
+    train_delta = pd.Timedelta(
+        days=TRAIN
     )
 
-    end = pd.Timestamp(
-        end,
-        tz="UTC",
+    test_delta = pd.Timedelta(
+        days=TEST
+    )
+
+    step_delta = pd.Timedelta(
+        days=STEP
+    )
+
+    cursor = (
+        start
+        + train_delta
     )
 
     out = []
 
-    tr = pd.Timedelta(
-        days=TRAIN
-    )
+    while (
+        cursor + test_delta
+        <= end
+    ):
 
-    te = pd.Timedelta(
-        days=TEST
-    )
+        tr0 = (
+            cursor
+            - train_delta
+        )
 
-    step = pd.Timedelta(
-        days=STEP
-    )
-
-    cursor = start + tr
-
-    while cursor + te <= end:
-
-        tr0 = cursor - tr
         tr1 = cursor
 
         te0 = cursor
-        te1 = cursor + te
+
+        te1 = (
+            cursor
+            + test_delta
+        )
 
         out.append(
             (
@@ -1334,45 +1801,16 @@ def folds(
             )
         )
 
-        cursor += step
+        cursor += step_delta
 
     return out
 
 
 # ============================================================
-# MEDIAN
-# ============================================================
-
-def finite_median(series):
-    x = pd.to_numeric(
-        series,
-        errors="coerce",
-    )
-
-    x = x[np.isfinite(x)]
-
-    if len(x) == 0:
-        return np.nan
-
-    return float(x.median())
-
-
-# ============================================================
-# V4.3 ROBUSTNESS
+# ROBUSTNESS
 # ============================================================
 
 def robustness(wf):
-    """
-    IMPORTANT:
-
-    wf must contain every fixed configuration on every fold.
-
-    active_folds therefore means:
-    number of OOS folds in which this configuration
-    actually generated at least one trade.
-
-    It does NOT mean number of folds won.
-    """
 
     if wf is None or wf.empty:
         return pd.DataFrame()
@@ -1385,13 +1823,14 @@ def robustness(wf):
         .astype(bool)
     )
 
-    for col in [
+    for col in (
         "test_n",
         "test_mean",
         "test_pf",
         "test_edge",
         "test_dd",
-    ]:
+    ):
+
         x[col] = pd.to_numeric(
             x[col],
             errors="coerce",
@@ -1438,7 +1877,7 @@ def robustness(wf):
             active["test_n"].sum()
         )
 
-        if active_folds:
+        if active_folds > 0:
 
             means = (
                 active["test_mean"]
@@ -1541,7 +1980,10 @@ def robustness(wf):
         )
 
         row = dict(
-            zip(cols, key)
+            zip(
+                cols,
+                key,
+            )
         )
 
         row.update({
@@ -1552,7 +1994,8 @@ def robustness(wf):
                 active_folds,
 
             "zero_trade_folds":
-                eligible_folds - active_folds,
+                eligible_folds
+                - active_folds,
 
             "total_trades":
                 total_trades,
@@ -1590,24 +2033,30 @@ def robustness(wf):
     if not rows:
         return pd.DataFrame()
 
-    out = pd.DataFrame(rows)
+    out = pd.DataFrame(
+        rows
+    )
 
-    return out.sort_values(
-        [
-            "robust",
-            "median_oos",
-            "median_pf",
-            "active_folds",
-            "total_trades",
-        ],
-        ascending=[
-            False,
-            False,
-            False,
-            False,
-            False,
-        ],
-    ).reset_index(drop=True)
+    return (
+        out
+        .sort_values(
+            [
+                "robust",
+                "median_oos",
+                "median_pf",
+                "active_folds",
+                "total_trades",
+            ],
+            ascending=[
+                False,
+                False,
+                False,
+                False,
+                False,
+            ],
+        )
+        .reset_index(drop=True)
+    )
 
 
 # ============================================================
@@ -1615,6 +2064,7 @@ def robustness(wf):
 # ============================================================
 
 def global_robust(rob):
+
     if rob is None or rob.empty:
         return pd.DataFrame()
 
@@ -1649,7 +2099,10 @@ def global_robust(rob):
         )
 
         row = dict(
-            zip(group_cols, key)
+            zip(
+                group_cols,
+                key,
+            )
         )
 
         row.update({
@@ -1672,7 +2125,10 @@ def global_robust(rob):
                 g["mean_edge"].mean(),
 
             "total_trades":
-                int(g["total_trades"].sum()),
+                int(
+                    g["total_trades"]
+                    .sum()
+                ),
 
             "robust_symbols":
                 len(symbols),
@@ -1680,22 +2136,28 @@ def global_robust(rob):
 
         rows.append(row)
 
-    return pd.DataFrame(rows).sort_values(
-        [
-            "robust_symbols",
-            "median_oos",
-            "median_pf",
-        ],
-        ascending=[
-            False,
-            False,
-            False,
-        ],
+    if not rows:
+        return pd.DataFrame()
+
+    return (
+        pd.DataFrame(rows)
+        .sort_values(
+            [
+                "robust_symbols",
+                "median_oos",
+                "median_pf",
+            ],
+            ascending=[
+                False,
+                False,
+                False,
+            ],
+        )
     )
 
 
 # ============================================================
-# V4.3 WF ENGINE
+# EXHAUSTIVE V4.3 WALK FORWARD
 # ============================================================
 
 def evaluate_walk_forward_v43(
@@ -1706,9 +2168,6 @@ def evaluate_walk_forward_v43(
     fs,
     random_runs=0,
 ):
-    """
-    Evaluate EVERY fixed configuration on EVERY fold.
-    """
 
     slip = SLIP.get(
         sym,
@@ -1717,11 +2176,13 @@ def evaluate_walk_forward_v43(
 
     configs = []
 
-    for ci, c in enumerate(cands):
+    for ci, c in enumerate(
+        cands
+    ):
 
         for tp, sl, hold in EXITS:
 
-            for prof in PROFILES:
+            for profile in PROFILES:
 
                 configs.append({
                     "ci": ci,
@@ -1729,19 +2190,19 @@ def evaluate_walk_forward_v43(
                     "tp": tp,
                     "sl": sl,
                     "hold": hold,
-                    "prof": prof,
+                    "profile": profile,
                 })
 
     print(
-        f"[{sym}] CONFIGURATIONS = "
+        f"[{sym}] CONFIGURATIONS="
         f"{len(configs)} | "
-        f"FOLDS = {len(fs)} | "
-        f"RANDOM = {random_runs}",
+        f"FOLDS={len(fs)} | "
+        f"RANDOM={random_runs}",
         flush=True,
     )
 
     # --------------------------------------------------------
-    # Precompute every simulation once.
+    # PRECOMPUTE SIMULATIONS
     # --------------------------------------------------------
 
     cache = {}
@@ -1761,7 +2222,7 @@ def evaluate_walk_forward_v43(
             cfg["tp"],
             cfg["sl"],
             cfg["hold"],
-            cfg["prof"],
+            cfg["profile"],
         )
 
         cache[key] = simulate(
@@ -1770,7 +2231,7 @@ def evaluate_walk_forward_v43(
             cfg["tp"],
             cfg["sl"],
             cfg["hold"],
-            cfg["prof"],
+            cfg["profile"],
             slip,
         )
 
@@ -1779,6 +2240,7 @@ def evaluate_walk_forward_v43(
             or no % checkpoint == 0
             or no == len(configs)
         ):
+
             print(
                 f"[{sym}] CACHE "
                 f"{no}/{len(configs)}",
@@ -1789,7 +2251,7 @@ def evaluate_walk_forward_v43(
     selected_rows = []
 
     # --------------------------------------------------------
-    # Every fold
+    # FOLDS
     # --------------------------------------------------------
 
     for fi, (
@@ -1804,9 +2266,11 @@ def evaluate_walk_forward_v43(
 
         print(
             f"[{sym}] FOLD "
-            f"{fi}/{len(fs)} "
-            f"TRAIN={tr0.date()}->{tr1.date()} "
-            f"TEST={te0.date()}->{te1.date()}",
+            f"{fi}/{len(fs)} | "
+            f"TRAIN "
+            f"{tr0.date()} -> {tr1.date()} | "
+            f"TEST "
+            f"{te0.date()} -> {te1.date()}",
             flush=True,
         )
 
@@ -1823,33 +2287,41 @@ def evaluate_walk_forward_v43(
                 cfg["tp"],
                 cfg["sl"],
                 cfg["hold"],
-                cfg["prof"],
+                cfg["profile"],
             )
 
             trades = cache[key]
 
-            tr = inside(
+            train_trades = inside(
                 trades,
                 tr0,
                 tr1,
             )
 
-            tt = inside(
+            test_trades = inside(
                 trades,
                 te0,
                 te1,
             )
 
-            tr_st = stats(tr)
-            te_st = stats(tt)
+            train_stats = stats(
+                train_trades
+            )
+
+            test_stats = stats(
+                test_trades
+            )
 
             train_score = score(
-                tr_st
+                train_stats
             )
 
             train_eligible = (
-                tr_st["n"] >= MIN_TRAIN
-                and finite(train_score)
+                train_stats["n"]
+                >= MIN_TRAIN
+                and finite(
+                    train_score
+                )
             )
 
             random_mean = np.nan
@@ -1857,11 +2329,10 @@ def evaluate_walk_forward_v43(
             random_pf = np.nan
             random_edge = np.nan
 
-            # Disabled in the first V4.3 run.
             if (
                 random_runs > 0
                 and train_eligible
-                and te_st["n"] > 0
+                and test_stats["n"] > 0
             ):
 
                 try:
@@ -1872,7 +2343,7 @@ def evaluate_walk_forward_v43(
                         cfg["tp"],
                         cfg["sl"],
                         cfg["hold"],
-                        cfg["prof"],
+                        cfg["profile"],
                         slip,
                         te0,
                         te1,
@@ -1914,17 +2385,29 @@ def evaluate_walk_forward_v43(
                     )
 
             row = {
-                "symbol": sym,
-                "interval": iv,
-                "fold": fi,
+                "symbol":
+                    sym,
 
-                "train_start": tr0,
-                "train_end": tr1,
+                "interval":
+                    iv,
 
-                "test_start": te0,
-                "test_end": te1,
+                "fold":
+                    fi,
 
-                "ci": cfg["ci"],
+                "train_start":
+                    tr0,
+
+                "train_end":
+                    tr1,
+
+                "test_start":
+                    te0,
+
+                "test_end":
+                    te1,
+
+                "ci":
+                    cfg["ci"],
 
                 "signal":
                     cfg["c"].name,
@@ -1933,7 +2416,7 @@ def evaluate_walk_forward_v43(
                     cfg["c"].regime,
 
                 "profile":
-                    cfg["prof"],
+                    cfg["profile"],
 
                 "tp":
                     cfg["tp"],
@@ -1945,46 +2428,48 @@ def evaluate_walk_forward_v43(
                     cfg["hold"],
 
                 "train_eligible":
-                    bool(train_eligible),
+                    bool(
+                        train_eligible
+                    ),
 
                 "selected":
                     False,
 
                 "train_n":
-                    tr_st["n"],
+                    train_stats["n"],
 
                 "train_mean":
-                    tr_st["mean"],
+                    train_stats["mean"],
 
                 "train_pf":
-                    tr_st["pf"],
+                    train_stats["pf"],
 
                 "train_edge":
-                    tr_st["edge"],
+                    train_stats["edge"],
 
                 "train_return":
-                    tr_st["return"],
+                    train_stats["return"],
 
                 "train_dd":
-                    tr_st["dd"],
+                    train_stats["dd"],
 
                 "test_n":
-                    te_st["n"],
+                    test_stats["n"],
 
                 "test_mean":
-                    te_st["mean"],
+                    test_stats["mean"],
 
                 "test_pf":
-                    te_st["pf"],
+                    test_stats["pf"],
 
                 "test_edge":
-                    te_st["edge"],
+                    test_stats["edge"],
 
                 "test_return":
-                    te_st["return"],
+                    test_stats["return"],
 
                 "test_dd":
-                    te_st["dd"],
+                    test_stats["dd"],
 
                 "random_mean":
                     random_mean,
@@ -2002,7 +2487,13 @@ def evaluate_walk_forward_v43(
                     train_score,
             }
 
-            fold_rows.append(row)
+            fold_rows.append(
+                row
+            )
+
+            # ----------------------------------------------
+            # Training winner only.
+            # ----------------------------------------------
 
             if train_eligible:
 
@@ -2017,14 +2508,13 @@ def evaluate_walk_forward_v43(
                             train_score,
 
                         "row_index":
-                            len(fold_rows) - 1,
-
-                        "cfg":
-                            cfg,
+                            len(
+                                fold_rows
+                            ) - 1,
                     }
 
         # ----------------------------------------------------
-        # Mark train winner.
+        # MARK WINNER
         # ----------------------------------------------------
 
         if best is not None:
@@ -2042,14 +2532,17 @@ def evaluate_walk_forward_v43(
             print(
                 f"[{sym}] FOLD "
                 f"{fi}/{len(fs)} DONE | "
-                f"WINNER={selected['signal']} | "
+                f"WINNER="
+                f"{selected['signal']} | "
                 f"{selected['regime']} | "
                 f"{selected['profile']} | "
                 f"TP={selected['tp']} "
                 f"SL={selected['sl']} "
                 f"H={selected['hold']} | "
-                f"TRAIN_N={selected['train_n']} | "
-                f"TEST_N={selected['test_n']}",
+                f"TRAIN_N="
+                f"{selected['train_n']} | "
+                f"TEST_N="
+                f"{selected['test_n']}",
                 flush=True,
             )
 
@@ -2092,6 +2585,7 @@ def run_holdout(
     end,
     robust_df,
 ):
+
     if (
         robust_df is None
         or robust_df.empty
@@ -2099,20 +2593,32 @@ def run_holdout(
         return []
 
     r = robust_df[
-        (robust_df["symbol"] == sym)
-        & (robust_df["interval"] == iv)
-        & (robust_df["robust"] == True)
+        (
+            robust_df["symbol"]
+            == sym
+        )
+        &
+        (
+            robust_df["interval"]
+            == iv
+        )
+        &
+        (
+            robust_df["robust"]
+            == True
+        )
     ].copy()
 
     if r.empty:
         return []
 
-    # Take the first robust configuration for this asset.
     r = r.iloc[0]
 
     target = None
 
-    for ci, c in enumerate(cands):
+    for ci, c in enumerate(
+        cands
+    ):
 
         if c.name != r["signal"]:
             continue
@@ -2124,12 +2630,13 @@ def run_holdout(
             ci,
             c,
         )
+
         break
 
     if target is None:
         return []
 
-    ci, c = target
+    _, c = target
 
     trades = simulate(
         L,
@@ -2138,7 +2645,10 @@ def run_holdout(
         float(r["sl"]),
         int(r["hold"]),
         r["profile"],
-        SLIP.get(sym, 0.0003),
+        SLIP.get(
+            sym,
+            0.0003,
+        ),
     )
 
     h = inside(
@@ -2150,22 +2660,53 @@ def run_holdout(
     st = stats(h)
 
     return [{
-        "symbol": sym,
-        "interval": iv,
-        "signal": c.name,
-        "regime": c.regime,
-        "profile": r["profile"],
-        "tp": r["tp"],
-        "sl": r["sl"],
-        "hold": r["hold"],
-        "holdout_start": start,
-        "holdout_end": end,
-        "holdout_n": st["n"],
-        "holdout_mean": st["mean"],
-        "holdout_pf": st["pf"],
-        "holdout_edge": st["edge"],
-        "holdout_return": st["return"],
-        "holdout_dd": st["dd"],
+        "symbol":
+            sym,
+
+        "interval":
+            iv,
+
+        "signal":
+            c.name,
+
+        "regime":
+            c.regime,
+
+        "profile":
+            r["profile"],
+
+        "tp":
+            r["tp"],
+
+        "sl":
+            r["sl"],
+
+        "hold":
+            r["hold"],
+
+        "holdout_start":
+            start,
+
+        "holdout_end":
+            end,
+
+        "holdout_n":
+            st["n"],
+
+        "holdout_mean":
+            st["mean"],
+
+        "holdout_pf":
+            st["pf"],
+
+        "holdout_edge":
+            st["edge"],
+
+        "holdout_return":
+            st["return"],
+
+        "holdout_dd":
+            st["dd"],
     }]
 
 
@@ -2190,7 +2731,9 @@ def main():
     parser.add_argument(
         "--intervals",
         nargs="+",
-        default=["1h"],
+        default=[
+            "1h",
+        ],
     )
 
     parser.add_argument(
@@ -2222,10 +2765,17 @@ def main():
     global CAPITAL
     CAPITAL = args.capital
 
-    random.seed(SEED)
-    np.random.seed(SEED)
+    random.seed(
+        SEED
+    )
 
-    Path("results").mkdir(
+    np.random.seed(
+        SEED
+    )
+
+    Path(
+        "results"
+    ).mkdir(
         parents=True,
         exist_ok=True,
     )
@@ -2263,17 +2813,20 @@ def main():
     )
 
     print(
-        f"History : {args.days} days",
+        f"History : "
+        f"{args.days} days",
         flush=True,
     )
 
     print(
-        f"MC runs : {args.mc_runs}",
+        f"MC runs : "
+        f"{args.mc_runs}",
         flush=True,
     )
 
     print(
-        f"Random  : {args.random_runs}",
+        f"Random  : "
+        f"{args.random_runs}",
         flush=True,
     )
 
@@ -2284,7 +2837,8 @@ def main():
     )
 
     print(
-        f"Holdout : {HOLD} days",
+        f"Holdout : "
+        f"{HOLD} days",
         flush=True,
     )
 
@@ -2323,7 +2877,7 @@ def main():
             )
 
             # ------------------------------------------------
-            # Entry timeframe
+            # ENTRY DATA
             # ------------------------------------------------
 
             entry = fetch(
@@ -2333,7 +2887,7 @@ def main():
             )
 
             # ------------------------------------------------
-            # Higher timeframe context
+            # HIGHER TIMEFRAME
             # ------------------------------------------------
 
             ctx_iv = CTX.get(
@@ -2344,11 +2898,16 @@ def main():
             higher = fetch(
                 sym,
                 ctx_iv,
-                args.days + WARM.get(
+                args.days
+                + WARM.get(
                     ctx_iv,
                     40,
                 ),
             )
+
+            # ------------------------------------------------
+            # FEATURES / CANDIDATES
+            # ------------------------------------------------
 
             L, cands = candidates(
                 entry,
@@ -2363,7 +2922,7 @@ def main():
             )
 
             # ------------------------------------------------
-            # WF dates
+            # WF FOLDS
             # ------------------------------------------------
 
             start = L["time"].min()
@@ -2380,7 +2939,7 @@ def main():
                 flush=True,
             )
 
-            if len(fs) == 0:
+            if not fs:
 
                 print(
                     f"[{sym}] "
@@ -2391,7 +2950,7 @@ def main():
                 continue
 
             # ------------------------------------------------
-            # V4.3 exhaustive WF
+            # EXHAUSTIVE V4.3
             # ------------------------------------------------
 
             wf_rows, selected_rows = (
@@ -2414,7 +2973,7 @@ def main():
             )
 
             # ------------------------------------------------
-            # Asset robustness
+            # ROBUSTNESS FOR ASSET
             # ------------------------------------------------
 
             wf_asset = pd.DataFrame(
@@ -2426,6 +2985,7 @@ def main():
             )
 
             if not rob_asset.empty:
+
                 all_rob_rows.extend(
                     rob_asset.to_dict(
                         "records"
@@ -2434,7 +2994,9 @@ def main():
 
             robust_count = (
                 int(
-                    rob_asset["robust"].sum()
+                    rob_asset[
+                        "robust"
+                    ].sum()
                 )
                 if not rob_asset.empty
                 else 0
@@ -2442,12 +3004,13 @@ def main():
 
             print(
                 f"[{sym}] ROBUST "
-                f"CONFIGS={robust_count}",
+                f"CONFIGS="
+                f"{robust_count}",
                 flush=True,
             )
 
             # ------------------------------------------------
-            # Holdout
+            # HOLDOUT
             # ------------------------------------------------
 
             holdout_start = (
@@ -2472,7 +3035,7 @@ def main():
             )
 
     # ========================================================
-    # FINAL OUTPUTS
+    # FINAL DATAFRAMES
     # ========================================================
 
     wf = pd.DataFrame(
@@ -2490,6 +3053,10 @@ def main():
     holdout = pd.DataFrame(
         all_holdout_rows
     )
+
+    # ========================================================
+    # SAVE
+    # ========================================================
 
     wf.to_csv(
         "results/walk_forward_v43.csv",
@@ -2511,9 +3078,9 @@ def main():
         index=False,
     )
 
-    # --------------------------------------------------------
-    # Global robustness
-    # --------------------------------------------------------
+    # ========================================================
+    # GLOBAL ROBUSTNESS
+    # ========================================================
 
     global_df = global_robust(
         rob
@@ -2524,13 +3091,15 @@ def main():
         index=False,
     )
 
-    # --------------------------------------------------------
-    # Summary
-    # --------------------------------------------------------
+    # ========================================================
+    # SUMMARY
+    # ========================================================
 
     robust_count = (
         int(
-            rob["robust"].sum()
+            rob[
+                "robust"
+            ].sum()
         )
         if not rob.empty
         else 0
@@ -2575,7 +3144,8 @@ def main():
     )
 
     summary.append(
-        f"- Holdout: {HOLD} days"
+        f"- Holdout: "
+        f"{HOLD} days"
     )
 
     summary.append("")
@@ -2604,11 +3174,13 @@ def main():
     summary.append("")
 
     summary.append(
-        f"- WF rows: {len(wf):,}"
+        f"- WF rows: "
+        f"{len(wf):,}"
     )
 
     summary.append(
-        f"- Selected rows: {len(selected):,}"
+        f"- Selected rows: "
+        f"{len(selected):,}"
     )
 
     summary.append(
@@ -2647,17 +3219,34 @@ def main():
         ]
 
         cols = [
-            c for c in cols
+            c
+            for c in cols
             if c in rob.columns
         ]
 
-        summary.append(
-            rob[cols]
-            .head(20)
-            .to_markdown(
-                index=False
+        try:
+
+            summary.append(
+                rob[
+                    cols
+                ]
+                .head(20)
+                .to_markdown(
+                    index=False
+                )
             )
-        )
+
+        except Exception:
+
+            summary.append(
+                rob[
+                    cols
+                ]
+                .head(20)
+                .to_string(
+                    index=False
+                )
+            )
 
     else:
 
@@ -2673,7 +3262,7 @@ def main():
     )
 
     # ========================================================
-    # FINAL CONSOLE
+    # FINAL LOG
     # ========================================================
 
     print(
@@ -2697,17 +3286,20 @@ def main():
     )
 
     print(
-        f"WF rows       : {len(wf):,}",
+        f"WF rows       : "
+        f"{len(wf):,}",
         flush=True,
     )
 
     print(
-        f"Selected rows : {len(selected):,}",
+        f"Selected rows : "
+        f"{len(selected):,}",
         flush=True,
     )
 
     print(
-        f"Robust configs: {robust_count}",
+        f"Robust configs: "
+        f"{robust_count}",
         flush=True,
     )
 
