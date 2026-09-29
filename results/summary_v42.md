@@ -10,6 +10,7 @@
 - FINAL HOLDOUT : 90 jours
 - Frais taker : 0.05%/côté
 - Frais maker : 0.02%/côté
+- Monte-Carlo demandé : 0
 
 ## Critères de robustesse
 
@@ -28,15 +29,15 @@ Une configuration n'est dite ROBUSTE que si tous les critères sont satisfaits.
 
 | mesure | valeur |
 |---|---:|
-| folds | 30 |
-| test mean/trade | -0.1629% |
-| folds positifs | 7/30 |
-| PF médian | 0.81 |
-| DD médian | -10.7700% |
-| médiane trade | -1.0160% |
-| hasard moyen | -0.0398% |
-| edge moyen vs hasard | -0.1231% |
-| folds > hasard | 10/30 |
+| folds | 6 |
+| test mean/trade | -0.2711% |
+| folds positifs | 1/6 |
+| PF médian | 0.60 |
+| DD médian | -7.0529% |
+| médiane trade | -0.9746% |
+| hasard moyen | -0.0723% |
+| edge moyen vs hasard | -0.1989% |
+| folds > hasard | 2/6 |
 
 ## Configurations robustes
 
@@ -48,27 +49,30 @@ Une configuration n'est dite ROBUSTE que si tous les critères sont satisfaits.
 
 | intervalle | signal | régime | profil | actifs | actifs robustes | trades | PF médian | edge médian | global robuste |
 |---|---|---|---|---:|---:|---:|---:|---:|---|
-| 1h | vwap n=48 k=2.0 | all | maker_tp | 1 | 0 | 56 | 0.71 | -0.2532% | False |
+| 1h | donchian n=20 vol=1.5 | all | maker_both | 1 | 0 | 39 | 1.65 | +0.5548% | False |
+| 1h | donchian n=20 vol=0.0 | trend | maker_both | 1 | 0 | 14 | 0.99 | +0.0505% | False |
+| 1h | vwap n=96 k=2.0 | trend | maker_tp | 1 | 0 | 21 | 0.68 | -0.2257% | False |
+| 1h | donchian n=20 vol=1.5 | all | maker_both | 1 | 0 | 40 | 0.53 | -0.3094% | False |
+| 1h | donchian n=20 vol=0.0 | trend | maker_tp | 1 | 0 | 12 | 0.34 | -0.4672% | False |
+| 1h | donchian n=50 vol=1.5 | all | maker_both | 1 | 0 | 21 | 0.27 | -0.7962% | False |
 
 ## Final holdout
 
 | actif | intervalle | signal | mean | t | PF | DD | n | return |
 |---|---|---|---:|---:|---:|---:|---:|---:|
-| BTCUSDT | 1h | zscore n=30 thr=2.0 | -0.0334% | -0.2 | 0.90 | -4.9014% | 28 | -1.0118% |
-| ETHUSDT | 1h | donchian n=50 vol=1.5 | -0.0292% | -0.1 | 0.96 | -18.4275% | 46 | -1.9597% |
-| SOLUSDT | 1h | pullback rsi=40 | -0.3033% | -1.4 | 0.56 | -10.2817% | 28 | -8.3079% |
+| — | — | Aucun holdout exécuté : aucune configuration robuste | — | — | — | — | — | — |
 
 ## Robustesse des coûts
 
 | scénario | mean/trade | PF médian | DD médian |
 |---|---:|---:|---:|
-| base | -0.1629% | 0.81 | -10.7700% |
-| fees+100% | -0.2250% | 0.75 | -11.2064% |
-| fees+25% | -0.1784% | 0.80 | -10.8793% |
-| fees+50% | -0.1939% | 0.79 | -10.9885% |
-| fees+50%_slip+100% | -0.2066% | 0.77 | -11.0523% |
-| slip+100% | -0.1756% | 0.79 | -10.8340% |
-| slip+50% | -0.1692% | 0.80 | -10.8020% |
+| base | -0.2711% | 0.60 | -7.0529% |
+| fees+100% | -0.3402% | 0.55 | -7.9326% |
+| fees+25% | -0.2884% | 0.59 | -7.2742% |
+| fees+50% | -0.3057% | 0.58 | -7.4945% |
+| fees+50%_slip+100% | -0.3186% | 0.56 | -7.7132% |
+| slip+100% | -0.2841% | 0.59 | -7.2734% |
+| slip+50% | -0.2776% | 0.60 | -7.1633% |
 
 ## Limites
 
@@ -81,6 +85,8 @@ Une configuration n'est dite ROBUSTE que si tous les critères sont satisfaits.
 - Monte-Carlo basé sur les trades observés.
 - Le final holdout n'est pas utilisé pour le filtre de robustesse.
 - Une configuration avec trop peu de trades est exclue.
+- Un fold OOS avec n=0 n'est pas considéré comme actif.
+- Le holdout final n'est exécuté que si une configuration passe tous les critères de robustesse.
 
 ## Règle d'interprétation
 
