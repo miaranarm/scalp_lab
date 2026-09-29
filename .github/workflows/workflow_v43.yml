@@ -1,10 +1,10 @@
-name: SCALP LAB V4.3.3
+name: SCALP LAB V4.3.4
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
@@ -46,6 +46,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: scalp-lab-v433-results
+          name: scalp-lab-v434-results
           path: results/*
           retention-days: 30
