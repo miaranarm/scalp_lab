@@ -32,7 +32,7 @@ jobs:
 
       - name: Run V4.3.5
         run: |
-          python -u research_v435.py \
+          python -u research_v43.py \
             --symbols BTCUSDT ETHUSDT SOLUSDT \
             --intervals 1h \
             --days 730 \
