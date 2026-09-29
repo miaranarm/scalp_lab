@@ -24,6 +24,7 @@ Ajoute :
 - filtre de robustesse
 - analyse multi-actifs
 - configurations n=0 invalides
+- Monte-Carlo réellement désactivable avec --mc-runs 0
 """
 
 from __future__ import annotations
@@ -31,7 +32,6 @@ from __future__ import annotations
 import argparse
 import io
 import math
-import os
 import time
 import zipfile
 from collections import Counter
@@ -84,23 +84,35 @@ PROFILES = (
 
 TRAIN_DAYS = 180
 TEST_DAYS = 45
-
-# V4.2 : holdout plus long
 FINAL_HOLDOUT_DAYS = 90
-
 STEP_DAYS = 45
 
 MIN_TRAIN_TRADES = 50
 
-# Robustesse V4.2
+# ------------------------------------------------------------
+# ROBUSTESSE V4.2
+# ------------------------------------------------------------
+
+# Nombre minimum de folds OOS avec au moins un trade.
 MIN_ACTIVE_FOLDS = 5
+
+# Nombre minimum de trades OOS cumulés.
 MIN_TOTAL_TRADES = 50
+
+# Au moins 50% des folds OOS doivent être positifs.
 MIN_POSITIVE_FOLD_RATIO = 0.50
+
+# Au moins 50% des folds OOS doivent battre le random-side.
 MIN_BEAT_RANDOM_RATIO = 0.50
+
+# PF médian minimum.
 MIN_MEDIAN_PF = 1.00
+
+# Edge médian contre random-side minimum.
 MIN_MEDIAN_EDGE_RANDOM = 0.0
 
 RANDOM_SIDE_RUNS = 100
+
 MC_RUNS = 5000
 MC_SEED = 20260928
 
@@ -1010,26 +1022,30 @@ def inside(
 # STATISTICS
 # ============================================================
 
+def empty_stats():
+
+    return {
+        "n": 0,
+        "mean": np.nan,
+        "se": np.nan,
+        "t": np.nan,
+        "gross": np.nan,
+        "fees": np.nan,
+        "slip": np.nan,
+        "win": np.nan,
+        "pf": np.nan,
+        "median": np.nan,
+        "p25": np.nan,
+        "p75": np.nan,
+        "dd": np.nan,
+        "ret": np.nan,
+    }
+
+
 def stats(trades):
 
     if not trades:
-
-        return {
-            "n": 0,
-            "mean": np.nan,
-            "se": np.nan,
-            "t": np.nan,
-            "gross": np.nan,
-            "fees": np.nan,
-            "slip": np.nan,
-            "win": np.nan,
-            "pf": np.nan,
-            "median": np.nan,
-            "p25": np.nan,
-            "p75": np.nan,
-            "dd": np.nan,
-            "ret": np.nan,
-        }
+        return empty_stats()
 
     net = np.array(
         [t["net"] for t in trades],
@@ -1040,6 +1056,17 @@ def stats(trades):
         [t["gross"] for t in trades],
         float,
     )
+
+    net = net[
+        np.isfinite(net)
+    ]
+
+    gross = gross[
+        np.isfinite(gross)
+    ]
+
+    if len(net) == 0:
+        return empty_stats()
 
     eq = np.cumprod(
         1 + net
@@ -1057,18 +1084,28 @@ def stats(trades):
     wins = net[net > 0]
     losses = net[net < 0]
 
-    pf = (
-        np.sum(wins)
-        / abs(np.sum(losses))
-        if len(losses)
-        else np.inf
+    if len(losses):
+        pf = (
+            np.sum(wins)
+            / abs(np.sum(losses))
+        )
+    else:
+        pf = np.inf
+
+    gross_mean = (
+        float(gross.mean())
+        if len(gross)
+        else np.nan
     )
 
-    gross_mean = gross.mean()
-    net_mean = net.mean()
+    net_mean = float(
+        net.mean()
+    )
 
     cost_mean = (
         gross_mean - net_mean
+        if np.isfinite(gross_mean)
+        else np.nan
     )
 
     se = (
@@ -1078,14 +1115,18 @@ def stats(trades):
         else np.nan
     )
 
-    t_stat = (
-        net_mean / se
-        if se and se > 0
-        else np.nan
-    )
+    if (
+        np.isfinite(se)
+        and se > 0
+    ):
+        t_stat = (
+            net_mean / se
+        )
+    else:
+        t_stat = np.nan
 
     return {
-        "n": len(net),
+        "n": int(len(net)),
         "mean": net_mean,
         "se": se,
         "t": t_stat,
@@ -1096,23 +1137,34 @@ def stats(trades):
             np.mean(net > 0)
         ),
         "pf": pf,
-        "median": np.median(net),
-        "p25": np.percentile(
-            net,
-            25,
+        "median": float(
+            np.median(net)
         ),
-        "p75": np.percentile(
-            net,
-            75,
+        "p25": float(
+            np.percentile(net, 25)
         ),
-        "dd": dd.min(),
-        "ret": eq[-1] - 1,
+        "p75": float(
+            np.percentile(net, 75)
+        ),
+        "dd": float(
+            dd.min()
+        ),
+        "ret": float(
+            eq[-1] - 1
+        ),
     }
 
 
 def score(s):
 
-    if s["n"] < MIN_TRAIN_TRADES:
+    if (
+        s["n"] < MIN_TRAIN_TRADES
+    ):
+        return -np.inf
+
+    if not np.isfinite(
+        s["mean"]
+    ):
         return -np.inf
 
     pf = (
@@ -1137,16 +1189,38 @@ def score(s):
         2,
     )
 
+    t_component = 0.0
+
+    if np.isfinite(
+        s["t"]
+    ):
+        t_component = np.clip(
+            s["t"],
+            -3,
+            3,
+        ) / 3
+
+    n_component = min(
+        math.log1p(
+            s["n"]
+        ) / math.log1p(150),
+        1,
+    )
+
     return (
-        0.50 * mean
+        0.35 * t_component
         + 0.30 * pf
-        + 0.20 * min(
-            math.log1p(s["n"]) / 6,
-            1,
+        + 0.20 * (
+            mean / 2
         )
+        + 0.15 * n_component
         - 0.15 * dd
     )
 
+
+# ============================================================
+# MONTE CARLO
+# ============================================================
 
 def monte_carlo(
     trades,
@@ -1155,9 +1229,41 @@ def monte_carlo(
     seed=MC_SEED,
 ):
 
-    if len(trades) < 20:
+    # --------------------------------------------------------
+    # V4.2 FIX :
+    # --mc-runs 0 signifie réellement "pas de MC".
+    # --------------------------------------------------------
+
+    if (
+        runs is None
+        or runs <= 0
+        or len(trades) < 20
+    ):
 
         return {
+            "enabled": False,
+            "median": np.nan,
+            "p05": np.nan,
+            "p95": np.nan,
+            "dd": np.nan,
+        }
+
+    r = np.array(
+        [
+            t["net"]
+            for t in trades
+        ],
+        float,
+    )
+
+    r = r[
+        np.isfinite(r)
+    ]
+
+    if len(r) < 20:
+
+        return {
+            "enabled": False,
             "median": np.nan,
             "p05": np.nan,
             "p95": np.nan,
@@ -1168,15 +1274,12 @@ def monte_carlo(
         seed
     )
 
-    r = np.array(
-        [t["net"] for t in trades],
-        float,
-    )
-
     finals = []
     dds = []
 
-    for _ in range(runs):
+    for _ in range(
+        int(runs)
+    ):
 
         x = rng.choice(
             r,
@@ -1186,34 +1289,74 @@ def monte_carlo(
 
         eq = (
             capital
-            * np.cumprod(1 + x)
+            * np.cumprod(
+                1 + x
+            )
         )
+
+        if len(eq) == 0:
+            continue
 
         peak = np.maximum.accumulate(
             eq
         )
 
         finals.append(
-            eq[-1]
+            float(eq[-1])
         )
 
         dds.append(
-            np.min(
-                eq / peak - 1
+            float(
+                np.min(
+                    eq / peak - 1
+                )
             )
         )
 
+    # --------------------------------------------------------
+    # Protection supplémentaire.
+    # --------------------------------------------------------
+
+    if not finals:
+
+        return {
+            "enabled": False,
+            "median": np.nan,
+            "p05": np.nan,
+            "p95": np.nan,
+            "dd": np.nan,
+        }
+
+    finals = np.asarray(
+        finals,
+        dtype=float,
+    )
+
+    dds = np.asarray(
+        dds,
+        dtype=float,
+    )
+
     return {
-        "median": np.median(finals),
-        "p05": np.percentile(
-            finals,
-            5,
+        "enabled": True,
+        "median": float(
+            np.median(finals)
         ),
-        "p95": np.percentile(
-            finals,
-            95,
+        "p05": float(
+            np.percentile(
+                finals,
+                5,
+            )
         ),
-        "dd": np.median(dds),
+        "p95": float(
+            np.percentile(
+                finals,
+                95,
+            )
+        ),
+        "dd": float(
+            np.median(dds)
+        ),
     }
 
 
@@ -1269,6 +1412,9 @@ def benchmark_random_side(
         candidate_signal
     )
 
+    if len(idx) == 0:
+        return []
+
     rand_signal = np.zeros(
         len(candidate_signal),
         dtype=np.int8,
@@ -1310,10 +1456,22 @@ def benchmark_random_side_mc(
     runs=RANDOM_SIDE_RUNS,
 ):
 
+    if runs <= 0:
+
+        return {
+            "mean": np.nan,
+            "se": np.nan,
+            "n": 0,
+            "p05": np.nan,
+            "p95": np.nan,
+        }
+
     means = []
     ns = []
 
-    for i in range(runs):
+    for i in range(
+        int(runs)
+    ):
 
         trades = benchmark_random_side(
             L,
@@ -1330,7 +1488,9 @@ def benchmark_random_side_mc(
 
         z = stats(trades)
 
-        if np.isfinite(z["mean"]):
+        if np.isfinite(
+            z["mean"]
+        ):
 
             means.append(
                 z["mean"]
@@ -1372,10 +1532,16 @@ def benchmark_random_side_mc(
             round(np.mean(ns))
         ),
         "p05": float(
-            np.percentile(a, 5)
+            np.percentile(
+                a,
+                5,
+            )
         ),
         "p95": float(
-            np.percentile(a, 95)
+            np.percentile(
+                a,
+                95,
+            )
         ),
     }
 
@@ -1391,6 +1557,13 @@ def benchmark_buy_hold(
 
     entry = L["c"][start]
     exit_ = L["c"][end - 1]
+
+    if (
+        not np.isfinite(entry)
+        or not np.isfinite(exit_)
+        or entry <= 0
+    ):
+        return []
 
     gross = (
         exit_ / entry - 1
@@ -1441,8 +1614,7 @@ def make_folds(
     )
 
     holdout = (
-        FINAL_HOLDOUT_DAYS
-        * bars
+        FINAL_HOLDOUT_DAYS * bars
     )
 
     usable = n - holdout
@@ -1465,8 +1637,7 @@ def make_folds(
         )
 
         s += (
-            STEP_DAYS
-            * bars
+            STEP_DAYS * bars
         )
 
     final_start = usable
@@ -1547,7 +1718,7 @@ def stress(
 
 
 # ============================================================
-# V4.2 ROBUSTNESS
+# ROBUSTESSE
 # ============================================================
 
 def config_key(row):
@@ -1569,7 +1740,9 @@ def finite_median(series):
         errors="coerce",
     )
 
-    x = x[np.isfinite(x)]
+    x = x[
+        np.isfinite(x)
+    ]
 
     if len(x) == 0:
         return np.nan
@@ -1612,12 +1785,20 @@ def aggregate_robustness(
     ):
 
         # ----------------------------------------------------
-        # n=0 / invalid folds exclus
+        # IMPORTANT :
+        # un fold est actif dès qu'il contient au moins
+        # un trade OOS.
+        #
+        # Le seuil de 50 trades s'applique au cumul.
         # ----------------------------------------------------
 
+        test_n = pd.to_numeric(
+            g["test_n"],
+            errors="coerce",
+        ).fillna(0)
+
         active = g[
-            g["test_n"].fillna(0)
-            >= MIN_TRAIN_TRADES
+            test_n > 0
         ].copy()
 
         if active.empty:
@@ -1626,24 +1807,39 @@ def aggregate_robustness(
         n_folds = len(active)
 
         total_trades = int(
-            active["test_n"].sum()
+            pd.to_numeric(
+                active["test_n"],
+                errors="coerce",
+            ).fillna(0).sum()
         )
+
+        test_means = pd.to_numeric(
+            active["test_mean"],
+            errors="coerce",
+        )
+
+        test_means = test_means[
+            np.isfinite(test_means)
+        ]
+
+        if len(test_means) == 0:
+            continue
 
         mean_oos = float(
-            active["test_mean"].mean()
+            test_means.mean()
         )
 
-        median_oos = finite_median(
-            active["test_mean"]
+        median_oos = float(
+            test_means.median()
         )
 
         std_oos = (
             float(
-                active["test_mean"].std(
+                test_means.std(
                     ddof=1
                 )
             )
-            if len(active) > 1
+            if len(test_means) > 1
             else np.nan
         )
 
@@ -1656,7 +1852,9 @@ def aggregate_robustness(
                 /
                 (
                     std_oos
-                    / math.sqrt(n_folds)
+                    / math.sqrt(
+                        len(test_means)
+                    )
                 )
             )
         else:
@@ -1664,15 +1862,38 @@ def aggregate_robustness(
 
         positive_ratio = float(
             np.mean(
-                active["test_mean"] > 0
+                test_means > 0
             )
         )
 
-        beat_random_ratio = float(
-            np.mean(
-                active["edge_vs_random"] > 0
-            )
+        edge = pd.to_numeric(
+            active["edge_vs_random"],
+            errors="coerce",
         )
+
+        edge = edge[
+            np.isfinite(edge)
+        ]
+
+        if len(edge):
+
+            median_edge = float(
+                np.median(edge)
+            )
+
+            mean_edge = float(
+                np.mean(edge)
+            )
+
+            beat_random_ratio = float(
+                np.mean(edge > 0)
+            )
+
+        else:
+
+            median_edge = np.nan
+            mean_edge = np.nan
+            beat_random_ratio = 0.0
 
         median_pf = finite_median(
             active["test_pf"]
@@ -1682,16 +1903,8 @@ def aggregate_robustness(
             active["test_dd"]
         )
 
-        median_edge = finite_median(
-            active["edge_vs_random"]
-        )
-
-        mean_edge = float(
-            active["edge_vs_random"].mean()
-        )
-
         # ----------------------------------------------------
-        # Score robuste
+        # SCORE ROBUSTE
         # ----------------------------------------------------
 
         stability = (
@@ -1699,25 +1912,41 @@ def aggregate_robustness(
             + beat_random_ratio
         ) / 2
 
-        pf_component = (
-            np.clip(
-                median_pf,
-                0,
-                2,
-            )
-            / 2
-            if np.isfinite(median_pf)
-            else 0
-        )
+        if np.isfinite(
+            median_pf
+        ):
 
-        edge_component = (
-            np.clip(
+            pf_component = np.clip(
+                median_pf - 1.0,
+                -1.0,
+                2.0,
+            )
+
+            pf_component = (
+                pf_component + 1.0
+            ) / 3.0
+
+        else:
+
+            pf_component = 0.0
+
+        if np.isfinite(
+            median_edge
+        ):
+
+            edge_component = np.clip(
                 median_edge,
                 -0.01,
                 0.01,
             )
-            + 0.01
-        ) / 0.02
+
+            edge_component = (
+                edge_component + 0.01
+            ) / 0.02
+
+        else:
+
+            edge_component = 0.0
 
         sample_component = min(
             1.0,
@@ -1729,11 +1958,11 @@ def aggregate_robustness(
             n_folds / 10,
         )
 
-        # pénalité supplémentaire pour variance OOS
         if (
             np.isfinite(std_oos)
             and std_oos > 0
         ):
+
             consistency = max(
                 0.0,
                 1.0
@@ -1742,7 +1971,9 @@ def aggregate_robustness(
                     1.0,
                 ),
             )
+
         else:
+
             consistency = 0.0
 
         robustness_score = (
@@ -1763,10 +1994,14 @@ def aggregate_robustness(
             >= MIN_POSITIVE_FOLD_RATIO
             and beat_random_ratio
             >= MIN_BEAT_RANDOM_RATIO
-            and np.isfinite(median_pf)
+            and np.isfinite(
+                median_pf
+            )
             and median_pf
             >= MIN_MEDIAN_PF
-            and np.isfinite(median_edge)
+            and np.isfinite(
+                median_edge
+            )
             and median_edge
             >= MIN_MEDIAN_EDGE_RANDOM
         )
@@ -1790,23 +2025,35 @@ def aggregate_robustness(
                 "std_oos": std_oos,
                 "t_oos": t_oos,
 
-                "positive_fold_ratio": positive_ratio,
-                "beat_random_ratio": beat_random_ratio,
+                "positive_fold_ratio":
+                    positive_ratio,
 
-                "median_pf": median_pf,
-                "median_dd": median_dd,
+                "beat_random_ratio":
+                    beat_random_ratio,
 
-                "mean_edge_random": mean_edge,
-                "median_edge_random": median_edge,
+                "median_pf":
+                    median_pf,
+
+                "median_dd":
+                    median_dd,
+
+                "mean_edge_random":
+                    mean_edge,
+
+                "median_edge_random":
+                    median_edge,
 
                 "robustness_score":
                     robustness_score,
 
-                "robust": robust,
+                "robust":
+                    bool(robust),
             }
         )
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(
+        rows
+    )
 
 
 def global_robustness(
@@ -1859,9 +2106,10 @@ def global_robustness(
                     g["mean_oos"].mean()
                 ),
 
-                "median_oos": finite_median(
-                    g["median_oos"]
-                ),
+                "median_oos":
+                    finite_median(
+                        g["median_oos"]
+                    ),
 
                 "positive_fold_ratio":
                     float(
@@ -1891,7 +2139,9 @@ def global_robustness(
             }
         )
 
-    result = pd.DataFrame(rows)
+    result = pd.DataFrame(
+        rows
+    )
 
     result["global_robust"] = (
         (result["symbols"] >= 3)
@@ -1942,10 +2192,37 @@ def global_robustness(
 
 def pct(x):
 
+    if x is None:
+        return "nan"
+
+    try:
+        x = float(x)
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return "nan"
+
     if not np.isfinite(x):
         return "nan"
 
     return f"{x * 100:+.4f}%"
+
+
+def fmt_num(x, digits=2):
+
+    try:
+        x = float(x)
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return "nan"
+
+    if not np.isfinite(x):
+        return "nan"
+
+    return f"{x:.{digits}f}"
 
 
 # ============================================================
@@ -1988,7 +2265,10 @@ def main():
 
     t0 = time.time()
 
-    outdir = Path("results")
+    outdir = Path(
+        "results"
+    )
+
     outdir.mkdir(
         exist_ok=True
     )
@@ -2067,6 +2347,11 @@ def main():
         f"positive>={MIN_POSITIVE_FOLD_RATIO:.0%} | "
         f">random>={MIN_BEAT_RANDOM_RATIO:.0%} | "
         f"PF>={MIN_MEDIAN_PF:.2f}"
+    )
+
+    say(
+        f"MONTE-CARLO | "
+        f"runs={args.mc_runs}"
     )
 
     say("")
@@ -2176,6 +2461,15 @@ def main():
                 f"holdout={FINAL_HOLDOUT_DAYS}j"
             )
 
+            if len(folds) < MIN_ACTIVE_FOLDS:
+
+                say(
+                    f"  WARNING: seulement "
+                    f"{len(folds)} folds OOS ; "
+                    f"minimum requis="
+                    f"{MIN_ACTIVE_FOLDS}"
+                )
+
             # ------------------------------------------------
             # WALK FORWARD
             # ------------------------------------------------
@@ -2219,9 +2513,13 @@ def main():
                                 tr1,
                             )
 
-                            st = stats(train)
+                            st = stats(
+                                train
+                            )
 
-                            sc = score(st)
+                            sc = score(
+                                st
+                            )
 
                             if (
                                 best is None
@@ -2240,7 +2538,21 @@ def main():
                                     "train": st,
                                 }
 
-                if best is None:
+                if (
+                    best is None
+                    or not np.isfinite(
+                        best["score"]
+                    )
+                ):
+
+                    say(
+                        f"  F{fi} "
+                        f"| aucune configuration "
+                        f"avec >= "
+                        f"{MIN_TRAIN_TRADES} "
+                        f"trades train"
+                    )
+
                     continue
 
                 test_trades = inside(
@@ -2264,6 +2576,10 @@ def main():
                     test_trades
                 )
 
+                # ------------------------------------------------
+                # MC
+                # ------------------------------------------------
+
                 mc = monte_carlo(
                     test_trades,
                     args.capital,
@@ -2277,7 +2593,9 @@ def main():
                     te1,
                 )
 
-                bs = stats(bench)
+                bs = stats(
+                    bench
+                )
 
                 bh = benchmark_buy_hold(
                     L,
@@ -2285,7 +2603,9 @@ def main():
                     te1,
                 )
 
-                bhs = stats(bh)
+                bhs = stats(
+                    bh
+                )
 
                 rs = (
                     benchmark_random_side_mc(
@@ -2309,6 +2629,20 @@ def main():
                         ),
                         runs=RANDOM_SIDE_RUNS,
                     )
+                )
+
+                edge_vs_random = (
+                    ts["mean"]
+                    - rs["mean"]
+                    if (
+                        np.isfinite(
+                            ts["mean"]
+                        )
+                        and np.isfinite(
+                            rs["mean"]
+                        )
+                    )
+                    else np.nan
                 )
 
                 spec = {
@@ -2392,6 +2726,8 @@ def main():
                         "test_return":
                             ts["ret"],
 
+                        "mc_enabled":
+                            mc["enabled"],
                         "mc_median":
                             mc["median"],
                         "mc_p05":
@@ -2418,8 +2754,7 @@ def main():
                             rs["n"],
 
                         "edge_vs_random":
-                            ts["mean"]
-                            - rs["mean"],
+                            edge_vs_random,
 
                         "bench_bh_return":
                             bhs["ret"],
@@ -2432,179 +2767,234 @@ def main():
                     f"{best['candidate'].regime} / "
                     f"{best['profile']} | "
                     f"TEST {pct(ts['mean'])} "
-                    f"(t={ts['t']:.1f}) | "
+                    f"(t={fmt_num(ts['t'], 1)}) | "
                     f"hasard100 "
                     f"{pct(rs['mean'])} | "
                     f"delta "
-                    f"{pct(ts['mean'] - rs['mean'])} | "
-                    f"PF={ts['pf']:.2f} | "
+                    f"{pct(edge_vs_random)} | "
+                    f"PF={fmt_num(ts['pf'], 2)} | "
                     f"DD={pct(ts['dd'])} | "
                     f"n={ts['n']}"
                 )
 
             # ------------------------------------------------
-            # HOLDOUT
-            # ------------------------------------------------
-            #
-            # Important :
-            # le holdout n'est PAS utilisé pour la robustesse.
-            #
-            # La configuration finale est déterminée à partir
-            # des configurations réellement sélectionnées dans
-            # les folds OOS.
+            # ROBUSTESSE PROVISOIRE POUR CET ACTIF
             # ------------------------------------------------
 
-            pair_rows = [
-                x
-                for x in rows
-                if (
-                    x["symbol"] == symbol
-                    and x["interval"] == interval
+            current_wf = pd.DataFrame(
+                [
+                    x
+                    for x in rows
+                    if (
+                        x["symbol"] == symbol
+                        and x["interval"] == interval
+                        and x["fold"] != "FINAL"
+                    )
+                ]
+            )
+
+            current_robustness = (
+                aggregate_robustness(
+                    current_wf
                 )
-            ]
+                if not current_wf.empty
+                else pd.DataFrame()
+            )
+
+            robust_candidates = (
+                current_robustness[
+                    current_robustness["robust"]
+                ].copy()
+                if not current_robustness.empty
+                else pd.DataFrame()
+            )
+
+            # ------------------------------------------------
+            # HOLDOUT
+            #
+            # V4.2 :
+            # PAS DE HOLDOUT si aucune configuration
+            # ne satisfait les critères de robustesse.
+            # ------------------------------------------------
 
             if (
-                holdout_start
-                < len(entry)
-                and pair_rows
+                holdout_start < len(entry)
+                and not robust_candidates.empty
             ):
 
-                counts = Counter(
-                    config_key(x)
-                    for x in pair_rows
+                robust_candidates = (
+                    robust_candidates.sort_values(
+                        [
+                            "robustness_score",
+                            "median_edge_random",
+                            "median_pf",
+                        ],
+                        ascending=False,
+                    )
                 )
 
-                chosen_key = counts.most_common(
-                    1
-                )[0][0]
-
-                match = next(
-                    x
-                    for x in pair_rows
-                    if config_key(x)
-                    == chosen_key
+                chosen = (
+                    robust_candidates.iloc[0]
                 )
 
-                cand = candidates[
-                    match["candidate"]
-                ]
+                chosen_signal = (
+                    chosen["signal"]
+                )
 
-                hold_trades = inside(
-                    simulate(
-                        L,
-                        cand.signal,
-                        match["tp"],
-                        match["sl"],
-                        match["hold"],
-                        match["profile"],
-                        SLIP.get(
-                            symbol,
-                            DEFAULT_SLIP,
+                chosen_regime = (
+                    chosen["regime"]
+                )
+
+                chosen_profile = (
+                    chosen["profile"]
+                )
+
+                chosen_tp = float(
+                    chosen["tp"]
+                )
+
+                chosen_sl = float(
+                    chosen["sl"]
+                )
+
+                chosen_hold = int(
+                    chosen["hold"]
+                )
+
+                candidate_index = None
+
+                for ci, cand in enumerate(
+                    candidates
+                ):
+
+                    if (
+                        cand.name
+                        == chosen_signal
+                        and cand.regime
+                        == chosen_regime
+                    ):
+
+                        candidate_index = ci
+                        break
+
+                if candidate_index is None:
+
+                    say(
+                        "  FINAL HOLDOUT "
+                        "| configuration robuste "
+                        "introuvable dans les candidats"
+                    )
+
+                else:
+
+                    cand = candidates[
+                        candidate_index
+                    ]
+
+                    hold_trades = inside(
+                        simulate(
+                            L,
+                            cand.signal,
+                            chosen_tp,
+                            chosen_sl,
+                            chosen_hold,
+                            chosen_profile,
+                            SLIP.get(
+                                symbol,
+                                DEFAULT_SLIP,
+                            ),
                         ),
-                    ),
-                    holdout_start,
-                    len(entry),
-                )
+                        holdout_start,
+                        len(entry),
+                    )
 
-                hs = stats(
-                    hold_trades
-                )
+                    hs = stats(
+                        hold_trades
+                    )
 
-                hmc = monte_carlo(
-                    hold_trades,
-                    args.capital,
-                    args.mc_runs,
-                    MC_SEED + 999,
-                )
+                    hmc = monte_carlo(
+                        hold_trades,
+                        args.capital,
+                        args.mc_runs,
+                        MC_SEED + 999,
+                    )
 
-                holdout_row = {
-                    "symbol": symbol,
-                    "interval": interval,
-                    "signal": match["signal"],
-                    "regime": match["regime"],
-                    "profile": match["profile"],
-                    "tp": match["tp"],
-                    "sl": match["sl"],
-                    "hold": match["hold"],
-                    "holdout_days":
-                        FINAL_HOLDOUT_DAYS,
-                    "holdout_n":
-                        hs["n"],
-                    "holdout_mean":
-                        hs["mean"],
-                    "holdout_t":
-                        hs["t"],
-                    "holdout_pf":
-                        hs["pf"],
-                    "holdout_dd":
-                        hs["dd"],
-                    "holdout_return":
-                        hs["ret"],
-                    "mc_median":
-                        hmc["median"],
-                    "mc_p05":
-                        hmc["p05"],
-                    "mc_p95":
-                        hmc["p95"],
-                    "mc_dd":
-                        hmc["dd"],
-                }
-
-                holdouts.append(
-                    holdout_row
-                )
-
-                rows.append(
-                    {
+                    holdout_row = {
                         "symbol": symbol,
                         "interval": interval,
-                        "fold": "FINAL",
-                        "candidate":
-                            match["candidate"],
-                        "signal":
-                            match["signal"],
-                        "regime":
-                            match["regime"],
-                        "profile":
-                            match["profile"],
-                        "tp":
-                            match["tp"],
-                        "sl":
-                            match["sl"],
-                        "hold":
-                            match["hold"],
-                        "train_n":
-                            np.nan,
-                        "train_mean":
-                            np.nan,
-                        "train_pf":
-                            np.nan,
-                        "test_n":
+                        "signal": chosen_signal,
+                        "regime": chosen_regime,
+                        "profile": chosen_profile,
+                        "tp": chosen_tp,
+                        "sl": chosen_sl,
+                        "hold": chosen_hold,
+                        "holdout_days":
+                            FINAL_HOLDOUT_DAYS,
+
+                        "robust_active_folds":
+                            int(
+                                chosen[
+                                    "active_folds"
+                                ]
+                            ),
+
+                        "robust_total_trades":
+                            int(
+                                chosen[
+                                    "total_trades"
+                                ]
+                            ),
+
+                        "robust_positive_ratio":
+                            float(
+                                chosen[
+                                    "positive_fold_ratio"
+                                ]
+                            ),
+
+                        "robust_beat_random_ratio":
+                            float(
+                                chosen[
+                                    "beat_random_ratio"
+                                ]
+                            ),
+
+                        "robust_median_pf":
+                            float(
+                                chosen[
+                                    "median_pf"
+                                ]
+                            ),
+
+                        "robust_median_edge_random":
+                            float(
+                                chosen[
+                                    "median_edge_random"
+                                ]
+                            ),
+
+                        "robustness_score":
+                            float(
+                                chosen[
+                                    "robustness_score"
+                                ]
+                            ),
+
+                        "holdout_n":
                             hs["n"],
-                        "test_gross":
-                            hs["gross"],
-                        "test_mean":
+                        "holdout_mean":
                             hs["mean"],
-                        "test_se":
-                            hs["se"],
-                        "test_t":
+                        "holdout_t":
                             hs["t"],
-                        "test_fees":
-                            hs["fees"],
-                        "test_win":
-                            hs["win"],
-                        "test_pf":
+                        "holdout_pf":
                             hs["pf"],
-                        "test_median":
-                            hs["median"],
-                        "test_p25":
-                            hs["p25"],
-                        "test_p75":
-                            hs["p75"],
-                        "test_dd":
+                        "holdout_dd":
                             hs["dd"],
-                        "test_return":
+                        "holdout_return":
                             hs["ret"],
+
+                        "mc_enabled":
+                            hmc["enabled"],
                         "mc_median":
                             hmc["median"],
                         "mc_p05":
@@ -2613,38 +3003,126 @@ def main():
                             hmc["p95"],
                         "mc_dd":
                             hmc["dd"],
-                        "bench_fixed_mean":
-                            np.nan,
-                        "bench_fixed_pf":
-                            np.nan,
-                        "bench_random_mean":
-                            np.nan,
-                        "bench_random_se":
-                            np.nan,
-                        "bench_random_p05":
-                            np.nan,
-                        "bench_random_p95":
-                            np.nan,
-                        "bench_random_n":
-                            np.nan,
-                        "edge_vs_random":
-                            np.nan,
-                        "bench_bh_return":
-                            np.nan,
                     }
-                )
 
-                say(
-                    f"  FINAL HOLDOUT "
-                    f"{FINAL_HOLDOUT_DAYS}j | "
-                    f"{match['signal']} | "
-                    f"{match['profile']} | "
-                    f"{pct(hs['mean'])} "
-                    f"(t={hs['t']:.1f}) | "
-                    f"PF={hs['pf']:.2f} | "
-                    f"DD={pct(hs['dd'])} | "
-                    f"n={hs['n']}"
-                )
+                    holdouts.append(
+                        holdout_row
+                    )
+
+                    rows.append(
+                        {
+                            "symbol": symbol,
+                            "interval": interval,
+                            "fold": "FINAL",
+                            "candidate":
+                                candidate_index,
+                            "signal":
+                                chosen_signal,
+                            "regime":
+                                chosen_regime,
+                            "profile":
+                                chosen_profile,
+                            "tp":
+                                chosen_tp,
+                            "sl":
+                                chosen_sl,
+                            "hold":
+                                chosen_hold,
+
+                            "train_n":
+                                np.nan,
+                            "train_mean":
+                                np.nan,
+                            "train_pf":
+                                np.nan,
+
+                            "test_n":
+                                hs["n"],
+                            "test_gross":
+                                hs["gross"],
+                            "test_mean":
+                                hs["mean"],
+                            "test_se":
+                                hs["se"],
+                            "test_t":
+                                hs["t"],
+                            "test_fees":
+                                hs["fees"],
+                            "test_win":
+                                hs["win"],
+                            "test_pf":
+                                hs["pf"],
+                            "test_median":
+                                hs["median"],
+                            "test_p25":
+                                hs["p25"],
+                            "test_p75":
+                                hs["p75"],
+                            "test_dd":
+                                hs["dd"],
+                            "test_return":
+                                hs["ret"],
+
+                            "mc_enabled":
+                                hmc["enabled"],
+                            "mc_median":
+                                hmc["median"],
+                            "mc_p05":
+                                hmc["p05"],
+                            "mc_p95":
+                                hmc["p95"],
+                            "mc_dd":
+                                hmc["dd"],
+
+                            "bench_fixed_mean":
+                                np.nan,
+                            "bench_fixed_pf":
+                                np.nan,
+                            "bench_random_mean":
+                                np.nan,
+                            "bench_random_se":
+                                np.nan,
+                            "bench_random_p05":
+                                np.nan,
+                            "bench_random_p95":
+                                np.nan,
+                            "bench_random_n":
+                                np.nan,
+                            "edge_vs_random":
+                                np.nan,
+                            "bench_bh_return":
+                                np.nan,
+                        }
+                    )
+
+                    say(
+                        f"  FINAL HOLDOUT "
+                        f"{FINAL_HOLDOUT_DAYS}j | "
+                        f"{chosen_signal} | "
+                        f"{chosen_profile} | "
+                        f"{pct(hs['mean'])} "
+                        f"(t={fmt_num(hs['t'], 1)}) | "
+                        f"PF={fmt_num(hs['pf'], 2)} | "
+                        f"DD={pct(hs['dd'])} | "
+                        f"n={hs['n']}"
+                    )
+
+            else:
+
+                if holdout_start >= len(entry):
+
+                    say(
+                        "  FINAL HOLDOUT "
+                        "| données insuffisantes"
+                    )
+
+                elif robust_candidates.empty:
+
+                    say(
+                        "  FINAL HOLDOUT "
+                        "| NON EXÉCUTÉ : "
+                        "aucune configuration robuste"
+                    )
 
             say(
                 f"  -> {symbol} {interval} "
@@ -2665,41 +3143,53 @@ def main():
     )
 
     if wf.empty:
+
         robustness = pd.DataFrame()
         global_df = pd.DataFrame()
+
     else:
-        robustness = aggregate_robustness(
-            wf
+
+        robustness = (
+            aggregate_robustness(
+                wf
+            )
         )
 
-        global_df = global_robustness(
-            robustness
+        global_df = (
+            global_robustness(
+                robustness
+            )
         )
 
     wf.to_csv(
-        outdir / "walk_forward_v42.csv",
+        outdir
+        / "walk_forward_v42.csv",
         index=False,
     )
 
     st.to_csv(
-        outdir / "stress_test_v42.csv",
+        outdir
+        / "stress_test_v42.csv",
         index=False,
     )
 
     robustness.to_csv(
-        outdir / "robustness_v42.csv",
+        outdir
+        / "robustness_v42.csv",
         index=False,
     )
 
     global_df.to_csv(
-        outdir / "global_v42.csv",
+        outdir
+        / "global_v42.csv",
         index=False,
     )
 
     pd.DataFrame(
         holdouts
     ).to_csv(
-        outdir / "holdout_v42.csv",
+        outdir
+        / "holdout_v42.csv",
         index=False,
     )
 
@@ -2720,6 +3210,7 @@ def main():
         f"- FINAL HOLDOUT : {FINAL_HOLDOUT_DAYS} jours",
         f"- Frais taker : {FEE_TAKER:.2%}/côté",
         f"- Frais maker : {FEE_MAKER:.2%}/côté",
+        f"- Monte-Carlo demandé : {args.mc_runs}",
         "",
         "## Critères de robustesse",
         "",
@@ -2738,7 +3229,9 @@ def main():
     ]
 
     valid = (
-        wf[wf["fold"] != "FINAL"]
+        wf[
+            wf["fold"] != "FINAL"
+        ]
         if not wf.empty
         else wf
     )
@@ -2754,6 +3247,52 @@ def main():
             if x.empty:
                 continue
 
+            positive = int(
+                (
+                    pd.to_numeric(
+                        x.test_mean,
+                        errors="coerce",
+                    )
+                    > 0
+                ).sum()
+            )
+
+            edge_values = pd.to_numeric(
+                x.edge_vs_random,
+                errors="coerce",
+            )
+
+            beat_random = int(
+                (
+                    edge_values > 0
+                ).sum()
+            )
+
+            test_mean = pd.to_numeric(
+                x.test_mean,
+                errors="coerce",
+            )
+
+            test_pf = pd.to_numeric(
+                x.test_pf,
+                errors="coerce",
+            )
+
+            test_dd = pd.to_numeric(
+                x.test_dd,
+                errors="coerce",
+            )
+
+            test_median = pd.to_numeric(
+                x.test_median,
+                errors="coerce",
+            )
+
+            random_mean = pd.to_numeric(
+                x.bench_random_mean,
+                errors="coerce",
+            )
+
             report += [
                 f"### {interval}",
                 "",
@@ -2761,21 +3300,21 @@ def main():
                 "|---|---:|",
                 f"| folds | {len(x)} |",
                 f"| test mean/trade | "
-                f"{pct(x.test_mean.mean())} |",
+                f"{pct(test_mean.mean())} |",
                 f"| folds positifs | "
-                f"{int((x.test_mean > 0).sum())}/{len(x)} |",
+                f"{positive}/{len(x)} |",
                 f"| PF médian | "
-                f"{x.test_pf.median():.2f} |",
+                f"{fmt_num(test_pf.median(), 2)} |",
                 f"| DD médian | "
-                f"{pct(x.test_dd.median())} |",
+                f"{pct(test_dd.median())} |",
                 f"| médiane trade | "
-                f"{pct(x.test_median.median())} |",
+                f"{pct(test_median.median())} |",
                 f"| hasard moyen | "
-                f"{pct(x.bench_random_mean.mean())} |",
+                f"{pct(random_mean.mean())} |",
                 f"| edge moyen vs hasard | "
-                f"{pct(x.edge_vs_random.mean())} |",
+                f"{pct(edge_values.mean())} |",
                 f"| folds > hasard | "
-                f"{int((x.edge_vs_random > 0).sum())}/{len(x)} |",
+                f"{beat_random}/{len(x)} |",
                 "",
             ]
 
@@ -2792,15 +3331,18 @@ def main():
 
     else:
 
-        robust = robustness[
-            robustness["robust"]
-        ].sort_values(
-            [
-                "robustness_score",
-                "median_edge_random",
-                "median_pf",
-            ],
-            ascending=False,
+        robust = (
+            robustness[
+                robustness["robust"]
+            ]
+            .sort_values(
+                [
+                    "robustness_score",
+                    "median_edge_random",
+                    "median_pf",
+                ],
+                ascending=False,
+            )
         )
 
         report += [
@@ -2813,13 +3355,15 @@ def main():
         if robust.empty:
 
             report.append(
-                "| — | — | Aucune configuration ne satisfait les critères | "
-                "— | — | — | — | — | — | — | — |"
+                "| — | — | Aucune configuration ne satisfait "
+                "les critères | — | — | — | — | — | — | — | — |"
             )
 
         else:
 
-            for _, r in robust.head(30).iterrows():
+            for _, r in robust.head(
+                30
+            ).iterrows():
 
                 report.append(
                     f"| {r.symbol} | "
@@ -2830,9 +3374,9 @@ def main():
                     f"{int(r.active_folds)} | "
                     f"{int(r.total_trades)} | "
                     f"{pct(r.mean_oos)} | "
-                    f"{r.median_pf:.2f} | "
+                    f"{fmt_num(r.median_pf, 2)} | "
                     f"{pct(r.median_edge_random)} | "
-                    f"{r.robustness_score:.3f} |"
+                    f"{fmt_num(r.robustness_score, 3)} |"
                 )
 
     report += [
@@ -2856,7 +3400,9 @@ def main():
             "|---|---|---|---|---:|---:|---:|---:|---:|---|",
         ]
 
-        for _, r in global_df.head(30).iterrows():
+        for _, r in global_df.head(
+            30
+        ).iterrows():
 
             report.append(
                 f"| {r.interval} | "
@@ -2866,7 +3412,7 @@ def main():
                 f"{r.symbols} | "
                 f"{r.robust_symbols} | "
                 f"{r.total_trades} | "
-                f"{r.median_pf:.2f} | "
+                f"{fmt_num(r.median_pf, 2)} | "
                 f"{pct(r.median_edge_random)} | "
                 f"{r.global_robust} |"
             )
@@ -2879,19 +3425,28 @@ def main():
         "|---|---|---|---:|---:|---:|---:|---:|---:|",
     ]
 
-    for h in holdouts:
+    if not holdouts:
 
         report.append(
-            f"| {h['symbol']} | "
-            f"{h['interval']} | "
-            f"{h['signal']} | "
-            f"{pct(h['holdout_mean'])} | "
-            f"{h['holdout_t']:.1f} | "
-            f"{h['holdout_pf']:.2f} | "
-            f"{pct(h['holdout_dd'])} | "
-            f"{h['holdout_n']} | "
-            f"{pct(h['holdout_return'])} |"
+            "| — | — | Aucun holdout exécuté : "
+            "aucune configuration robuste | — | — | — | — | — | — |"
         )
+
+    else:
+
+        for h in holdouts:
+
+            report.append(
+                f"| {h['symbol']} | "
+                f"{h['interval']} | "
+                f"{h['signal']} | "
+                f"{pct(h['holdout_mean'])} | "
+                f"{fmt_num(h['holdout_t'], 1)} | "
+                f"{fmt_num(h['holdout_pf'], 2)} | "
+                f"{pct(h['holdout_dd'])} | "
+                f"{h['holdout_n']} | "
+                f"{pct(h['holdout_return'])} |"
+            )
 
     report += [
         "",
@@ -2902,7 +3457,9 @@ def main():
     if not st.empty:
 
         g = (
-            st.groupby("scenario")
+            st.groupby(
+                "scenario"
+            )
             .agg(
                 mean=("mean", "mean"),
                 pf=("pf", "median"),
@@ -2921,9 +3478,15 @@ def main():
             report.append(
                 f"| {r.scenario} | "
                 f"{pct(r['mean'])} | "
-                f"{r.pf:.2f} | "
+                f"{fmt_num(r.pf, 2)} | "
                 f"{pct(r.dd)} |"
             )
+
+    else:
+
+        report.append(
+            "Aucun test de stress disponible."
+        )
 
     report += [
         "",
@@ -2938,6 +3501,9 @@ def main():
         "- Monte-Carlo basé sur les trades observés.",
         "- Le final holdout n'est pas utilisé pour le filtre de robustesse.",
         "- Une configuration avec trop peu de trades est exclue.",
+        "- Un fold OOS avec n=0 n'est pas considéré comme actif.",
+        "- Le holdout final n'est exécuté que si une configuration "
+        "passe tous les critères de robustesse.",
         "",
         "## Règle d'interprétation",
         "",
@@ -2947,13 +3513,15 @@ def main():
         "une configuration positive.",
     ]
 
-    (outdir / "summary_v42.md").write_text(
+    (
+        outdir / "summary_v42.md"
+    ).write_text(
         "\n".join(report) + "\n",
         encoding="utf-8",
     )
 
     # ========================================================
-    # CONSOLE
+    # CONSOLE FINAL
     # ========================================================
 
     print("")
@@ -2983,6 +3551,11 @@ def main():
         print(
             "Configurations robustes : 0"
         )
+
+    print(
+        f"Monte-Carlo : "
+        f"{args.mc_runs} runs"
+    )
 
     print("")
     print(
