@@ -4,13 +4,13 @@ from pathlib import Path
 from datetime import datetime,timezone,timedelta
 import pandas as pd
 
-S="SOLUSDT"; URL=f"wss://fstream.binance.com/ws/{S.lower()}@trade"
-STATE=Path("state/live_v4386.json"); OUT=Path("results/live_candles_v4386.csv")
-RUN=600; UA={"User-Agent":"Mozilla/5.0"}
-STATE.parent.mkdir(exist_ok=True); OUT.parent.mkdir(exist_ok=True)
-N=BAD=0; C=None; LIVE=[]; STOP=False
+S="SOLUSDT";URL=f"wss://fstream.binance.com/ws/{S.lower()}@trade"
+STATE=Path("state/live_v4386.json");OUT=Path("results/live_candles_v4386.csv")
+RUN=600;UA={"User-Agent":"Mozilla/5.0"}
+STATE.parent.mkdir(exist_ok=True);OUT.parent.mkdir(exist_ok=True)
+N=BAD=0;C=None;LIVE=[];STOP=False
 
-def log(x): print(x,flush=True)
+def log(x):print(x,flush=True)
 
 def load():
     try:return json.loads(STATE.read_text())
@@ -30,12 +30,11 @@ def parse(b):
     return [{
         "time":datetime.fromtimestamp(int(x.time)/1000,tz=timezone.utc).isoformat(),
         "open":float(x.open),"high":float(x.high),"low":float(x.low),
-        "close":float(x.close),"volume":float(x.volume),
-        "trades":int(x.trades)
+        "close":float(x.close),"volume":float(x.volume),"trades":int(x.trades)
     } for x in z.itertuples()]
 
 def vision():
-    now=datetime.now(timezone.utc); out={}
+    now=datetime.now(timezone.utc);out={}
     urls=[]
     for d in [now-timedelta(days=i) for i in range(4)]:
         fn=f"{S}-1h-{d:%Y-%m-%d}.zip"
@@ -46,9 +45,9 @@ def vision():
         try:
             r=requests.get(u,headers=UA,timeout=20)
             if r.status_code!=200:
-                log(f"VISION HTTP | {r.status_code}"); continue
+                log(f"VISION HTTP | {r.status_code}");continue
             for x in parse(r.content):out[x["time"]]=x
-        except Exception as e:log(f"VISION ERROR | {type(e).__name__} | {e}")
+        except Exception as e:log(f"VISION ERROR | {type(e).__name__}")
     return list(out.values())
 
 def msg(ws,m):
@@ -65,8 +64,8 @@ def msg(ws,m):
             C={"time":k,"open":p,"high":p,"low":p,
                "close":p,"volume":q,"trades":1,"closed":False}
         else:
-            C["high"]=max(C["high"],p); C["low"]=min(C["low"],p)
-            C["close"]=p; C["volume"]+=q; C["trades"]+=1
+            C["high"]=max(C["high"],p);C["low"]=min(C["low"],p)
+            C["close"]=p;C["volume"]+=q;C["trades"]+=1
     except:BAD+=1
 
 def opened(ws):log("WS CONNECT | OK")
@@ -84,13 +83,13 @@ def wsrun():
 
 def main():
     global C
-    log("V438.6d | CONTINUITY | 10 MIN")
-    s=load(); old={x["time"]:x for x in s.get("candles",[])}
+    log("V438.6e | CONTINUITY | 10 MIN")
+    s=load();old={x["time"]:x for x in s.get("candles",[])}
 
-    v=vision(); log(f"VISION | {len(v)}")
+    v=vision();log(f"VISION | {len(v)}")
+    now=datetime.now(timezone.utc).replace(minute=0,second=0,microsecond=0)
     for x in v:
-        if datetime.fromisoformat(x["time"]) < datetime.now(timezone.utc).replace(
-            minute=0,second=0,microsecond=0): old[x["time"]]=x
+        if datetime.fromisoformat(x["time"])<now:old[x["time"]]=x
 
     C=s.get("live")
     if C:log(f"RESUME LIVE | {C['time']}")
@@ -100,6 +99,7 @@ def main():
     while time.time()-t<RUN and not STOP:time.sleep(5)
 
     now=datetime.now(timezone.utc).replace(minute=0,second=0,microsecond=0)
+
     if C:
         C["closed"]=datetime.fromisoformat(C["time"])<now
         LIVE.append(C.copy())
@@ -111,27 +111,43 @@ def main():
 
     rows=sorted(old.values(),key=lambda x:x["time"])
     closed=[x for x in rows if x.get("closed",True)]
+
     ts=[datetime.fromisoformat(x["time"]) for x in closed]
     gaps=[(a.isoformat(),b.isoformat()) for a,b in zip(ts,ts[1:])
           if b-a!=timedelta(hours=1)]
 
+    last=closed[-1]["time"] if closed else None
+    live=C if C and not C["closed"] else None
+    gap_live=0
+
+    if last and live:
+        a=datetime.fromisoformat(last)
+        b=datetime.fromisoformat(live["time"])
+        gap_live=max(0,int((b-a).total_seconds()/3600)-1)
+
+    continuous=not gaps and gap_live==0 and len(closed)>=20
+
     s.update({
-        "candles":rows,"live":None if C and C["closed"] else C,
-        "last_closed":closed[-1]["time"] if closed else None,
+        "candles":rows,"live":live,"last_closed":last,
         "closed_count":len(closed),"gaps":gaps[-20:],
-        "warmup":len(closed)<20 or bool(gaps),
+        "gap_to_live_hours":gap_live,"warmup":not continuous,
+        "continuous20":continuous,
         "updated":datetime.now(timezone.utc).isoformat(),
         "live_trades":N,"bad_messages":BAD
     })
+
     STATE.write_text(json.dumps(s,indent=2))
     pd.DataFrame(rows).to_csv(OUT,index=False)
 
-    log(f"TRADES | {N}");log(f"BAD | {BAD}")
+    log(f"TRADES | {N}")
+    log(f"BAD | {BAD}")
     log(f"CANDLES TOTAL | {len(rows)}")
     log(f"CANDLES CLOSED | {len(closed)}")
-    log(f"GAPS | {len(gaps)}")
-    log(f"LAST CLOSED | {s['last_closed']}")
-    log(f"WARMUP | {'YES' if s['warmup'] else 'NO'}")
+    log(f"GAPS INTERNAL | {len(gaps)}")
+    log(f"GAP TO LIVE | {gap_live}h")
+    log(f"LAST CLOSED | {last}")
+    log(f"WARMUP | {'YES' if not continuous else 'NO'}")
+    log(f"CONTINUOUS20 | {'YES' if continuous else 'NO'}")
     log("RESULT | CONTINUITY TEST OK")
 
 if __name__=="__main__":main()
