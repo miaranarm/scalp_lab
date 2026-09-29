@@ -1,15 +1,13 @@
-name: SCALP LAB V4.3.8.2 PAPER
+name: SCALP LAB V4.3.8.4 WS TEST
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "5 * * * *"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  paper:
+  test:
     runs-on: ubuntu-latest
 
     steps:
@@ -19,14 +17,6 @@ jobs:
         with:
           python-version: "3.11"
 
-      - run: pip install -q pandas numpy requests
+      - run: pip install -q websocket-client
 
-      - run: python -u paper_v438.py
-
-      - name: Save state
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state results
-          git diff --cached --quiet || git commit -m "paper V4.3.8 update"
-          git push
+      - run: python -u feed_test.py
