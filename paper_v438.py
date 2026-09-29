@@ -40,7 +40,7 @@ def vision(symbol,interval,days):
         fn=f"{symbol}-{interval}-{p.year}-{p.month:02d}.zip"
         url=f"{base}/monthly/klines/{symbol}/{interval}/{fn}"
         try:
-            r=requests.get(url,headers=UA,timeout=25)
+            r=requests.get(url,headers=UA,timeout=20)
             z=read_zip(r.content) if r.status_code==200 else None
         except Exception:z=None
 
@@ -51,7 +51,7 @@ def vision(symbol,interval,days):
                 fn=f"{symbol}-{interval}-{d:%Y-%m-%d}.zip"
                 url=f"{base}/daily/klines/{symbol}/{interval}/{fn}"
                 try:
-                    r=requests.get(url,headers=UA,timeout=15)
+                    r=requests.get(url,headers=UA,timeout=12)
                     z=read_zip(r.content) if r.status_code==200 else None
                 except Exception:z=None
                 if z is not None: rows.append(z)
@@ -68,10 +68,13 @@ def vision(symbol,interval,days):
 def rest(symbol,interval,days):
     end=pd.Timestamp.now(tz="UTC").floor("h")
     start=end-pd.Timedelta(days=days)
+
     hosts=[
         "https://fapi.binance.com",
         "https://fapi1.binance.com",
-        "https://fapi2.binance.com"
+        "https://fapi2.binance.com",
+        "https://fapi3.binance.com",
+        "https://fapi4.binance.com"
     ]
 
     for host in hosts:
@@ -84,18 +87,24 @@ def rest(symbol,interval,days):
                     "endTime":int(end.timestamp()*1000),
                     "limit":1500
                 },
-                headers=UA,timeout=15
+                headers=UA,timeout=12
             )
 
-            if r.status_code!=200:continue
+            log(f"REST | {host} | HTTP {r.status_code}")
+
+            if r.status_code!=200:
+                try: log(f"      {r.text[:180]}")
+                except Exception: pass
+                continue
 
             a=r.json()
-            if not a:continue
+            if not a:
+                log("      EMPTY")
+                continue
 
             z=pd.DataFrame(a,columns=COLS)
             z["time"]=pd.to_datetime(
-                pd.to_numeric(z.time),
-                unit="ms",utc=True
+                pd.to_numeric(z.time),unit="ms",utc=True
             )
 
             for c in ["open","high","low","close","volume"]:
@@ -105,21 +114,22 @@ def rest(symbol,interval,days):
                 subset=["open","high","low","close"]
             )
 
-            log(f"REST OK | {host} | {len(z)}")
+            log(f"      OK {len(z)} candles")
             return z.sort_values("time").reset_index(drop=True)
 
-        except Exception:
-            pass
+        except Exception as e:
+            log(f"REST | {host} | {type(e).__name__}: {e}")
 
     return pd.DataFrame()
 
 def fetch(symbol,interval,days):
+    log(f"FEED | {symbol} {interval}")
     z=rest(symbol,interval,days)
 
     if not z.empty:
         return z
 
-    log("REST unavailable -> Vision")
+    log("REST ALL FAILED -> VISION")
     z=vision(symbol,interval,days)
     log(f"VISION | {len(z)}")
     return z
@@ -193,9 +203,9 @@ def close_trade(s,p,price,reason,time):
 
 def process_bar(s,bar,prev_sig):
     bt=str(bar.time)
-    had_pos=s["position"] is not None
+    had=s["position"] is not None
 
-    if had_pos:
+    if had:
         p=s["position"]
         age=(
             pd.Timestamp(bar.time)-
@@ -214,16 +224,11 @@ def process_bar(s,bar,prev_sig):
 
         elif age>=HOLD:
             close_trade(
-                s,p,float(bar.close),
-                "TIME",bar.time
+                s,p,float(bar.close),"TIME",bar.time
             )
             log(f"EXIT TIME | {bt} | {bar.close:.3f}")
 
-    if (
-        not had_pos and
-        s["position"] is None and
-        prev_sig
-    ):
+    if not had and s["position"] is None and prev_sig:
         entry=float(bar.open)*(1+SLIP)
 
         s["position"]={
@@ -247,7 +252,7 @@ def main():
     a=ap.parse_args()
 
     log("")
-    log("V438.2 | PAPER FORWARD")
+    log("V438.3 | PAPER FORWARD")
     log("SOLUSDT | DONCHIAN20 | LONG")
     log("TP=3% | SL=1.5% | HOLD=36h | ALL_TAKER")
 
@@ -274,9 +279,9 @@ def main():
     lag=(expected-last1h).total_seconds()/3600
 
     log(f"DATA | 1h={len(x)} 4h={len(h)}")
-    log(f"EXPECTED 1H | {expected}")
-    log(f"ACTUAL 1H   | {last1h}")
-    log(f"LAG         | {lag:.1f}h")
+    log(f"EXPECTED | {expected}")
+    log(f"ACTUAL   | {last1h}")
+    log(f"LAG      | {lag:.1f}h")
 
     if lag>MAX_LAG:
         log("STALE DATA | NO TRADING | STATE UNCHANGED")
@@ -290,7 +295,7 @@ def main():
 
     log(f"PROCESS | {len(todo)} closed bars")
 
-    for i,(_,bar) in enumerate(todo.iterrows()):
+    for _,bar in todo.iterrows():
         prev=d[d.time<bar.time].tail(1)
         prev_sig=bool(prev.sig.iloc[0]) if len(prev) else False
         log(f"BAR | {bar.time}")
@@ -301,8 +306,7 @@ def main():
 
     if s["position"]:
         s["equity"]*=(
-            float(last.close)/
-            s["position"]["entry"]
+            float(last.close)/s["position"]["entry"]
         )
 
     s["peak"]=max(s["peak"],s["equity"])
@@ -313,12 +317,8 @@ def main():
 
     if n:
         wins=int((tr.ret_pct>0).sum())
-        gains=tr.loc[
-            tr.ret_pct>0,"ret_pct"
-        ].sum()
-        losses=-tr.loc[
-            tr.ret_pct<0,"ret_pct"
-        ].sum()
+        gains=tr.loc[tr.ret_pct>0,"ret_pct"].sum()
+        losses=-tr.loc[tr.ret_pct<0,"ret_pct"].sum()
         pf=gains/losses if losses else np.inf
     else:
         wins=0;pf=np.nan
@@ -326,8 +326,7 @@ def main():
     log(
         f"STATUS | EQ={s['equity']:.2f} | "
         f"CASH={s['cash']:.2f} | TRADES={n} | "
-        f"WIN={wins} | PF={pf:.3f} | "
-        f"DD={dd:.2f}% | "
+        f"WIN={wins} | PF={pf:.3f} | DD={dd:.2f}% | "
         f"POS={'OPEN' if s['position'] else 'FLAT'}"
     )
 
@@ -335,15 +334,12 @@ def main():
 
     if n:
         tr.to_csv(
-            OUT/"paper_trades_v438.csv",
-            index=False
+            OUT/"paper_trades_v438.csv",index=False
         )
 
-    Path(
-        OUT/"paper_summary_v438.md"
-    ).write_text(
+    Path(OUT/"paper_summary_v438.md").write_text(
         "\n".join([
-            "# SCALP LAB V4.3.8.2",
+            "# SCALP LAB V4.3.8.3",
             "",
             "- SOLUSDT / Donchian20 / LONG",
             "- TP 3% / SL 1.5% / HOLD 36h",
@@ -360,7 +356,7 @@ def main():
         encoding="utf-8"
     )
 
-    log("DONE V438.2")
+    log("DONE V438.3")
 
 if __name__=="__main__":
     main()
