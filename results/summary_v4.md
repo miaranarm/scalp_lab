@@ -1,4 +1,4 @@
-# SCALP LAB V4 — rapport de recherche
+# SCALP LAB V4 (corrigé) — rapport de recherche
 
 - Données : Binance USD-M
 - TRAIN : 180 jours
@@ -15,52 +15,56 @@
 | mesure | valeur |
 |---|---:|
 | folds | 9 |
-| test mean/trade | -0.0379% |
+| test mean/trade | -0.0482% |
 | folds positifs | 3/9 |
 | PF médian | 0.64 |
 | DD médian | -1.5545% |
 | médiane trade | -0.0579% |
+| mean/trade hasard (côté aléatoire) | -0.1057% |
 
 ### 15m
 
 | mesure | valeur |
 |---|---:|
 | folds | 9 |
-| test mean/trade | -0.0873% |
+| test mean/trade | -0.0778% |
 | folds positifs | 2/9 |
-| PF médian | 0.80 |
+| PF médian | 0.84 |
 | DD médian | -2.7557% |
-| médiane trade | -0.2939% |
+| médiane trade | -0.2372% |
+| mean/trade hasard (côté aléatoire) | -0.1990% |
 
 ## FINAL HOLDOUT
 
-| symbole | intervalle | mean/trade | PF | DD | n | return |
-|---|---|---:|---:|---:|---:|---:|
-| BTCUSDT | 5m | -0.0675% | 0.59 | -0.8207% | 13 | -0.8787% |
-| ETHUSDT | 5m | -0.0162% | 0.90 | -1.9458% | 31 | -0.5187% |
-| SOLUSDT | 5m | -0.1080% | 0.63 | -2.1710% | 11 | -1.1953% |
-| BTCUSDT | 15m | +0.0117% | 1.06 | -3.1781% | 38 | +0.4050% |
-| ETHUSDT | 15m | -0.3018% | 0.34 | -8.7062% | 29 | -8.4481% |
-| SOLUSDT | 15m | -0.2481% | 0.49 | -2.4152% | 11 | -2.7297% |
+| symbole | intervalle | mean/trade | t | PF | DD | n | return |
+|---|---|---:|---:|---:|---:|---:|---:|
+| BTCUSDT | 5m | -0.0675% | -0.8 | 0.59 | -0.8207% | 13 | -0.8787% |
+| ETHUSDT | 5m | -0.0235% | -0.4 | 0.85 | -2.0686% | 31 | -0.7447% |
+| SOLUSDT | 5m | -0.1080% | -0.7 | 0.63 | -2.1710% | 11 | -1.1953% |
+| BTCUSDT | 15m | +0.0085% | 0.1 | 1.04 | -4.1126% | 37 | +0.2796% |
+| ETHUSDT | 15m | -0.3018% | -2.5 | 0.34 | -8.7062% | 29 | -8.4481% |
+| SOLUSDT | 15m | -0.2481% | -1.0 | 0.49 | -2.4152% | 11 | -2.7297% |
 
 ## Benchmarks
 
-| intervalle | stratégie mean | benchmark mécanique |
+`benchmark mécanique` = toujours LONG à intervalle fixe (capte la dérive directionnelle du marché, PAS un repère « sans avantage »). `hasard (côté aléatoire)`, dans le tableau walk-forward ci-dessus, est le repère honnête : mêmes points d'entrée que la stratégie, côté tiré au hasard.
+
+| intervalle | stratégie mean | benchmark mécanique (toujours LONG) |
 |---|---:|---:|
-| 5m | -0.0379% | -0.1858% |
-| 15m | -0.0873% | -0.2187% |
+| 5m | -0.0482% | -0.1805% |
+| 15m | -0.0778% | -0.2078% |
 
 ## Robustesse des coûts
 
 | scénario | mean/trade | PF médian | DD médian |
 |---|---:|---:|---:|
-| base | -0.0626% | 0.75 | -2.2566% |
-| fees+100% | -0.1237% | 0.59 | -2.7998% |
-| fees+25% | -0.0779% | 0.71 | -2.3488% |
-| fees+50% | -0.0931% | 0.67 | -2.4940% |
-| fees+50%_slip+100% | -0.1066% | 0.65 | -2.6413% |
-| slip+100% | -0.0759% | 0.73 | -2.3539% |
-| slip+50% | -0.0686% | 0.74 | -2.2972% |
+| base | -0.0630% | 0.77 | -2.2566% |
+| fees+100% | -0.1241% | 0.63 | -2.7998% |
+| fees+25% | -0.0783% | 0.73 | -2.3488% |
+| fees+50% | -0.0936% | 0.69 | -2.4940% |
+| fees+50%_slip+100% | -0.1064% | 0.67 | -2.6413% |
+| slip+100% | -0.0758% | 0.74 | -2.3539% |
+| slip+50% | -0.0703% | 0.75 | -2.2972% |
 
 ## Distribution des stratégies sélectionnées
 
@@ -80,12 +84,14 @@
 
 - OHLCV uniquement.
 - Pas de carnet d'ordres.
-- Exécution maker approximée.
+- Exécution maker approximée (seuil de franchissement fixe, appliqué de façon symétrique entrée/sortie).
 - Pas de funding.
 - Pas de latence réseau réelle.
 - Ambiguïté intrabougie TP/SL résolue par priorité au SL.
 - Monte-Carlo basé sur les trades observés.
 - Le FINAL HOLDOUT n'est pas utilisé pour la sélection.
+- Seulement 3 folds de walk-forward par paire : les intervalles de confiance sur le mean/trade restent larges, à lire avec prudence (voir la colonne t ci-dessus).
+- Le score de sélection ne pénalise pas explicitement l'incertitude d'échantillonnage (pas de terme de significativité) au-delà du nombre minimal de trades : un point élevé sur peu de trades peut encore être choisi alors qu'il est surtout du bruit.
 
 ## Interprétation
 
