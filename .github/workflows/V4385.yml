@@ -1,4 +1,4 @@
-name: SCALP LAB V4.3.8.5 CANDLE TEST
+name: SCALP LAB V4.3.8.5 CONTINUITY
 
 on:
   workflow_dispatch:
@@ -9,6 +9,8 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 2
+
     steps:
       - uses: actions/checkout@v4
 
@@ -18,4 +20,4 @@ jobs:
 
       - run: pip install -q websocket-client
 
-      - run: timeout 40s python -u feed_test.py
+      - run: timeout 85s python -u feed_test.py
