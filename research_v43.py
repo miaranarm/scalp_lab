@@ -1,15 +1,16 @@
 """
-SCALP LAB V4.3 — diagnostic complet de robustesse Binance USD-M
+SCALP LAB V4.3
+Research-only walk-forward engine.
 
-V4.3 conserve les paramètres V4.2 mais corrige la mesure de robustesse :
-toutes les configurations sont évaluées sur chaque fold.
-
-Objectif :
-- distinguer "configuration non sélectionnée" de "aucun trade"
-- mesurer la couverture réelle des signaux
-- mesurer la robustesse d'une configuration fixe à travers les folds
-- conserver un benchmark random
-- conserver le holdout final
+V4.3 changes versus V4.2
+-------------------------
+1. Every fixed configuration is evaluated on every WF fold.
+2. Robustness is calculated from the complete OOS matrix.
+3. Training winner is stored separately in selected_v43.csv.
+4. Simulations are cached once per configuration.
+5. Random benchmark is disabled by default.
+6. Explicit progress logging is emitted throughout the run.
+7. No deployment / live trading.
 """
 
 from __future__ import annotations
@@ -17,39 +18,46 @@ from __future__ import annotations
 import argparse
 import io
 import math
-import time
+import os
+import random
 import zipfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
 import requests
 
 
+# ============================================================
+# CONFIG
+# ============================================================
+
 BASE = "https://data.binance.vision/data/futures/um"
 
 MS = {
-    "5m": 300000,
-    "15m": 900000,
-    "1h": 3600000,
-    "4h": 14400000,
+    "5m": 300_000,
+    "15m": 900_000,
+    "1h": 3_600_000,
+    "4h": 14_400_000,
 }
 
-FT, FM, TH = 0.0005, 0.0002, 0.00005
+FT = 0.0005
+FM = 0.0002
+TH = 0.00005
 
 SLIP = {
-    "BTCUSDT": 0.0001,
+    "BTCUSDT": 0.00010,
     "ETHUSDT": 0.00015,
-    "SOLUSDT": 0.0003,
+    "SOLUSDT": 0.00030,
 }
 
 EXITS = (
-    (1.5, 1, 12),
-    (2, 1, 24),
-    (3, 1.5, 36),
-    (2, 2, 24),
+    (1.5, 1.0, 12),
+    (2.0, 1.0, 24),
+    (3.0, 1.5, 36),
+    (2.0, 2.0, 24),
 )
 
 PROFILES = (
@@ -58,18 +66,26 @@ PROFILES = (
     "maker_both",
 )
 
-TRAIN, TEST, HOLD, STEP = 180, 45, 90, 45
+TRAIN = 180
+TEST = 45
+HOLD = 90
+STEP = 45
 
 MIN_TRAIN = 50
 MIN_FOLDS = 5
 MIN_TRADES = 50
+
 MIN_POS = 0.50
 MIN_RANDOM = 0.50
 MIN_PF = 1.0
 MIN_EDGE = 0.0
 
-RANDOM_RUNS = 100
-MC_RUNS = 5000
+# V4.3 first diagnostic run:
+# keep this at 0.
+RANDOM_RUNS = 0
+
+MC_RUNS = 0
+
 SEED = 20260928
 CAPITAL = 100.0
 
@@ -84,496 +100,688 @@ WARM = {
     "4h": 40,
 }
 
-SIGNALS = (
-    ("vwap", {"n": 48, "k": 2}),
-    ("vwap", {"n": 96, "k": 2}),
-    ("vwap", {"n": 48, "k": 3}),
-    ("donchian", {"n": 20, "vol": 0}),
-    ("donchian", {"n": 20, "vol": 1.5}),
-    ("donchian", {"n": 50, "vol": 1.5}),
-    ("zscore", {"n": 30, "thr": 2}),
-    ("zscore", {"n": 60, "thr": 2.5}),
-    ("pullback", {"rsi": 35}),
-    ("pullback", {"rsi": 40}),
-    ("breakout", {"n": 20}),
-)
 
-REGIMES = (
-    "all",
-    "trend",
-    "range",
-)
+# ============================================================
+# DATA STRUCTURES
+# ============================================================
+
+@dataclass
+class Candidate:
+    name: str
+    signal: dict
+    regime: str
 
 
 # ============================================================
-# DATA
+# GENERAL HELPERS
 # ============================================================
 
-def unzip_csv(b):
-    with zipfile.ZipFile(io.BytesIO(b)) as z:
-        raw = z.read(z.namelist()[0]).decode()
-
-    return [
-        r[:12]
-        for r in (x.split(",") for x in raw.splitlines())
-        if r and r[0].isdigit()
-    ]
+def finite(x):
+    try:
+        return np.isfinite(float(x))
+    except Exception:
+        return False
 
 
-def fetch(symbol, iv, a, b):
-    out = []
-    step = MS[iv]
+def safe_float(x, default=np.nan):
+    try:
+        v = float(x)
+        return v if np.isfinite(v) else default
+    except Exception:
+        return default
 
-    s = (
-        datetime.fromtimestamp(a / 1000, timezone.utc)
-        .replace(
-            day=1,
-            hour=0,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
+
+def fmt_pct(x):
+    if not finite(x):
+        return "nan"
+    return f"{float(x) * 100:.3f}%"
+
+
+# ============================================================
+# BINANCE VISION DATA
+# ============================================================
+
+def month_range(start, end):
+    cur = pd.Timestamp(start).to_period("M")
+    last = pd.Timestamp(end).to_period("M")
+
+    while cur <= last:
+        yield cur.year, cur.month
+        cur += 1
+
+
+def fetch_month(symbol, interval, year, month):
+    """
+    Binance Futures Vision monthly archive.
+    """
+    url = (
+        f"{BASE}/monthly/klines/"
+        f"{symbol}/{interval}/"
+        f"{symbol}-{interval}-{year:04d}-{month:02d}.zip"
     )
 
-    e = datetime.fromtimestamp(b / 1000, timezone.utc)
+    r = requests.get(
+        url,
+        timeout=60,
+        headers={"User-Agent": "scalp-lab-v43"},
+    )
 
-    while s < e:
-        n = (
-            s.replace(year=s.year + 1, month=1)
-            if s.month == 12
-            else s.replace(month=s.month + 1)
+    if r.status_code == 404:
+        return None
+
+    r.raise_for_status()
+
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        names = z.namelist()
+
+        csv_name = next(
+            (n for n in names if n.lower().endswith(".csv")),
+            None,
         )
 
-        aa = max(s.timestamp() * 1000, a)
-        bb = min(n.timestamp() * 1000 - step, b)
+        if csv_name is None:
+            return None
 
-        if aa <= bb:
-            u = (
-                f"{BASE}/monthly/klines/"
-                f"{symbol}/{iv}/"
-                f"{symbol}-{iv}-{s:%Y-%m}.zip"
+        with z.open(csv_name) as f:
+            df = pd.read_csv(f, header=None)
+
+    return df
+
+
+def fetch(symbol, interval, days):
+    """
+    Download Binance Futures Vision monthly files.
+    """
+    end = pd.Timestamp.now(tz="UTC").floor("h")
+    start = end - pd.Timedelta(days=days)
+
+    print(
+        f"[{symbol}] DATA {interval} "
+        f"{start.date()} -> {end.date()}",
+        flush=True,
+    )
+
+    frames = []
+
+    for year, month in month_range(start, end):
+
+        print(
+            f"[{symbol}] download "
+            f"{year:04d}-{month:02d}",
+            flush=True,
+        )
+
+        try:
+            x = fetch_month(
+                symbol,
+                interval,
+                year,
+                month,
             )
 
-            try:
-                r = requests.get(u, timeout=60)
-            except requests.RequestException:
-                r = None
+            if x is not None and not x.empty:
+                frames.append(x)
 
-            if r is not None and r.ok:
-                out += unzip_csv(r.content)
+        except Exception as e:
+            print(
+                f"[{symbol}] archive error "
+                f"{year}-{month:02d}: {e}",
+                flush=True,
+            )
 
-            else:
-                d = datetime.fromtimestamp(
-                    aa / 1000,
-                    timezone.utc,
-                ).date()
+    if not frames:
+        raise RuntimeError(
+            f"No Binance Vision data for {symbol} {interval}"
+        )
 
-                z = datetime.fromtimestamp(
-                    bb / 1000,
-                    timezone.utc,
-                ).date()
+    df = pd.concat(
+        frames,
+        ignore_index=True,
+    )
 
-                while d <= z:
-                    u = (
-                        f"{BASE}/daily/klines/"
-                        f"{symbol}/{iv}/"
-                        f"{symbol}-{iv}-{d}.zip"
-                    )
-
-                    try:
-                        q = requests.get(u, timeout=30)
-                    except requests.RequestException:
-                        q = None
-
-                    if q is not None and q.ok:
-                        out += unzip_csv(q.content)
-
-                    d += pd.Timedelta(days=1)
-
-        s = n
-
-    return out
-
-
-def frame(rows):
+    # Binance kline schema
     cols = [
-        "time",
+        "open_time",
         "open",
         "high",
         "low",
         "close",
         "volume",
-        "x",
-        "q",
-        "n",
-        "tb",
-        "tq",
-        "i",
+        "close_time",
+        "quote_volume",
+        "trades",
+        "taker_buy_base",
+        "taker_buy_quote",
+        "ignore",
     ]
 
-    d = pd.DataFrame(rows, columns=cols)
+    if len(df.columns) >= len(cols):
+        df = df.iloc[:, :len(cols)]
+        df.columns = cols
 
-    for c in cols[:6]:
-        d[c] = pd.to_numeric(d[c], errors="coerce")
+    df["time"] = pd.to_datetime(
+        pd.to_numeric(df["open_time"], errors="coerce"),
+        unit="ms",
+        utc=True,
+    )
 
-    return (
-        d.dropna(subset=cols[:6])
+    for c in [
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    ]:
+        df[c] = pd.to_numeric(
+            df[c],
+            errors="coerce",
+        )
+
+    df = df[
+        [
+            "time",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+        ]
+    ]
+
+    df = df.dropna()
+
+    df = df[
+        (df["time"] >= start)
+        & (df["time"] <= end)
+    ]
+
+    df = (
+        df.sort_values("time")
         .drop_duplicates("time")
-        .sort_values("time")
         .reset_index(drop=True)
     )
+
+    print(
+        f"[{symbol}] candles={len(df):,}",
+        flush=True,
+    )
+
+    return df
 
 
 # ============================================================
 # FEATURES
 # ============================================================
 
-def features(d):
-    c, h, l, v = (
-        d.close,
-        d.high,
-        d.low,
-        d.volume,
-    )
+def atr(df, n=14):
+    h = df["high"]
+    l = df["low"]
+    c = df["close"]
 
-    p = c.shift()
+    pc = c.shift(1)
 
     tr = pd.concat(
         [
             h - l,
-            (h - p).abs(),
-            (l - p).abs(),
+            (h - pc).abs(),
+            (l - pc).abs(),
         ],
         axis=1,
     ).max(axis=1)
 
-    du = c.diff()
-    up = du.clip(lower=0)
-    dn = -du.clip(upper=0)
+    return tr.rolling(
+        n,
+        min_periods=n,
+    ).mean()
 
-    au = up.ewm(alpha=1 / 14, adjust=False).mean()
-    ad = dn.ewm(alpha=1 / 14, adjust=False).mean()
 
-    rsi = 100 - 100 / (
-        1 + au / ad.replace(0, np.nan)
+def rsi(series, n=14):
+    d = series.diff()
+
+    up = d.clip(lower=0)
+    dn = -d.clip(upper=0)
+
+    au = up.ewm(
+        alpha=1 / n,
+        adjust=False,
+        min_periods=n,
+    ).mean()
+
+    ad = dn.ewm(
+        alpha=1 / n,
+        adjust=False,
+        min_periods=n,
+    ).mean()
+
+    rs = au / ad.replace(0, np.nan)
+
+    return 100 - 100 / (1 + rs)
+
+
+def rolling_vwap(df, n):
+    pv = df["close"] * df["volume"]
+
+    return (
+        pv.rolling(n, min_periods=n).sum()
+        / df["volume"].rolling(
+            n,
+            min_periods=n,
+        ).sum()
     )
 
-    atr = tr.ewm(alpha=1 / 14, adjust=False).mean()
 
-    e9 = c.ewm(span=9, adjust=False).mean()
-    e20 = c.ewm(span=20, adjust=False).mean()
-    e50 = c.ewm(span=50, adjust=False).mean()
-    e200 = c.ewm(span=200, adjust=False).mean()
+def zscore(series, n):
+    mean = series.rolling(
+        n,
+        min_periods=n,
+    ).mean()
 
-    z = (
-        (c - c.rolling(20).mean())
-        / c.rolling(20).std().replace(0, np.nan)
+    std = series.rolling(
+        n,
+        min_periods=n,
+    ).std()
+
+    return (series - mean) / std.replace(0, np.nan)
+
+
+def donchian_high(df, n):
+    return (
+        df["high"]
+        .rolling(n, min_periods=n)
+        .max()
+        .shift(1)
     )
 
-    vr = (
-        v
-        / v.rolling(20).mean().replace(0, np.nan)
+
+def donchian_low(df, n):
+    return (
+        df["low"]
+        .rolling(n, min_periods=n)
+        .min()
+        .shift(1)
     )
 
-    typ = (h + l + c) / 3
 
-    return {
-        "c": c.to_numpy(float),
-        "h": h.to_numpy(float),
-        "l": l.to_numpy(float),
-        "v": v.to_numpy(float),
-        "rsi": rsi.to_numpy(float),
-        "atr": atr.to_numpy(float),
-        "ema9": e9.to_numpy(float),
-        "ema20": e20.to_numpy(float),
-        "ema50": e50.to_numpy(float),
-        "ema200": e200.to_numpy(float),
-        "z20": z.to_numpy(float),
-        "vol_ratio": vr.to_numpy(float),
-        "vwap48": (
-            (typ * v).rolling(48).sum()
-            / v.rolling(48).sum()
-        ).to_numpy(float),
-        "vwap96": (
-            (typ * v).rolling(96).sum()
-            / v.rolling(96).sum()
-        ).to_numpy(float),
-        "atr_pct": (atr / c).to_numpy(float),
-        "ret": c.pct_change().to_numpy(float),
-        "ema20_slope": e20.pct_change(6).to_numpy(float),
-        "ema50_slope": e50.pct_change(12).to_numpy(float),
-        "ema_sep": ((e20 - e50) / c).to_numpy(float),
-        "dist200": ((c - e200) / e200).to_numpy(float),
-    }
+def features(df):
+    x = df.copy()
 
+    x["atr14"] = atr(x, 14)
 
-def context(entry, h1, iv):
-    f = features(h1)
+    x["ema20"] = x["close"].ewm(
+        span=20,
+        adjust=False,
+    ).mean()
 
-    keys = (
-        "c",
-        "ema20",
-        "ema50",
-        "ema200",
-        "atr",
-        "rsi",
-        "ema20_slope",
-        "ema50_slope",
-        "ema_sep",
-        "dist200",
+    x["ema50"] = x["close"].ewm(
+        span=50,
+        adjust=False,
+    ).mean()
+
+    x["ema200"] = x["close"].ewm(
+        span=200,
+        adjust=False,
+    ).mean()
+
+    x["rsi14"] = rsi(
+        x["close"],
+        14,
     )
 
-    x = pd.DataFrame(
-        {
-            "time": h1.time.to_numpy(),
-            **{k: f[k] for k in keys},
-        }
-    )
-
-    x.time += MS[iv]
-
-    e = pd.DataFrame(
-        {"time": entry.time.to_numpy()}
-    )
-
-    a = pd.merge_asof(
-        e.sort_values("time"),
-        x.sort_values("time"),
-        on="time",
-        direction="backward",
-    )
-
-    (
-        c,
-        e20,
-        e50,
-        e200,
-        s20,
-        s50,
-        sep,
-        d200,
-    ) = [
-        a[k].to_numpy(float)
-        for k in (
-            "c",
-            "ema20",
-            "ema50",
-            "ema200",
-            "ema20_slope",
-            "ema50_slope",
-            "ema_sep",
-            "dist200",
+    for n in (48, 96):
+        x[f"vwap{n}"] = rolling_vwap(
+            x,
+            n,
         )
-    ]
 
-    valid = np.isfinite(
-        np.column_stack(
-            [
-                c,
-                e20,
-                e50,
-                e200,
-                s20,
-                s50,
-                sep,
-                d200,
-            ]
+    for n in (30, 60):
+        x[f"z{n}"] = zscore(
+            x["close"],
+            n,
         )
-    ).all(1)
 
-    up = (
-        valid
-        & (e20 > e50)
-        & (c > e200)
-        & (sep >= 0.0025)
-        & (d200 <= 0.045)
-    )
+    for n in (20, 50):
+        x[f"dh{n}"] = donchian_high(
+            x,
+            n,
+        )
 
-    dn = (
-        valid
-        & (e20 < e50)
-        & (c < e200)
-        & (sep <= -0.0025)
-        & (d200 >= -0.045)
-    )
-
-    return {
-        "all": valid,
-        "trend": up | dn,
-        "range": (
-            valid
-            & (abs(sep) < 0.0025)
-            & (abs(d200) < 0.02)
-        ),
-        "trend_up": up,
-        "trend_down": dn,
-    }
-
-
-@dataclass
-class Candidate:
-    name: str
-    signal: np.ndarray
-    regime: str
-
-
-def sig(long, short):
-    x = np.zeros(
-        len(long),
-        dtype=np.int8,
-    )
-
-    x[long] = 1
-    x[short] = -1
+        x[f"dl{n}"] = donchian_low(
+            x,
+            n,
+        )
 
     return x
 
 
-def signal(name, p, f):
-    c, h, l = (
-        f["c"],
-        f["h"],
-        f["l"],
+# ============================================================
+# HIGHER TIMEFRAME CONTEXT
+# ============================================================
+
+def context(entry, higher, iv):
+    """
+    Align closed higher-timeframe candles with entry candles.
+    """
+
+    ctx = higher.copy()
+
+    ctx["ema20"] = ctx["close"].ewm(
+        span=20,
+        adjust=False,
+    ).mean()
+
+    ctx["ema50"] = ctx["close"].ewm(
+        span=50,
+        adjust=False,
+    ).mean()
+
+    ctx["ema200"] = ctx["close"].ewm(
+        span=200,
+        adjust=False,
+    ).mean()
+
+    ctx["atr14"] = atr(
+        ctx,
+        14,
     )
 
-    if name == "vwap":
+    # Context candle is usable only after it has closed.
+    ctx["time"] = (
+        ctx["time"]
+        + pd.to_timedelta(
+            MS[iv],
+            unit="ms",
+        )
+    )
+
+    ctx = ctx[
+        [
+            "time",
+            "close",
+            "ema20",
+            "ema50",
+            "ema200",
+            "atr14",
+        ]
+    ].sort_values("time")
+
+    out = pd.merge_asof(
+        entry.sort_values("time"),
+        ctx,
+        on="time",
+        direction="backward",
+        suffixes=("", "_ctx"),
+    )
+
+    out["trend"] = np.where(
+        out["ema20_ctx"] > out["ema50_ctx"],
+        1,
+        np.where(
+            out["ema20_ctx"] < out["ema50_ctx"],
+            -1,
+            0,
+        ),
+    )
+
+    return out
+
+
+# ============================================================
+# SIGNALS
+# ============================================================
+
+def signal(df, spec):
+    kind = spec["kind"]
+
+    close = df["close"]
+    atr14 = df["atr14"]
+
+    s = pd.Series(
+        0,
+        index=df.index,
+        dtype="int8",
+    )
+
+    if kind == "vwap":
+
+        n = spec["n"]
+        k = spec["k"]
+
+        v = df[f"vwap{n}"]
+
         dist = (
-            (c - f[f"vwap{p['n']}"])
-            / f["atr"]
+            (close - v)
+            / atr14.replace(0, np.nan)
         )
 
-        return sig(
-            dist < -p["k"],
-            dist > p["k"],
-        )
+        s.loc[dist < -k] = 1
+        s.loc[dist > k] = -1
 
-    if name == "donchian":
-        n = p["n"]
+    elif kind == "donchian":
 
-        hi = (
-            pd.Series(h)
-            .rolling(n)
-            .max()
-            .shift(1)
-            .to_numpy()
-        )
+        n = spec["n"]
+        vol = spec["vol"]
 
-        lo = (
-            pd.Series(l)
-            .rolling(n)
-            .min()
-            .shift(1)
-            .to_numpy()
-        )
+        hi = df[f"dh{n}"]
+        lo = df[f"dl{n}"]
 
-        vr = f["vol_ratio"]
+        if vol == 0:
+            long_cond = close > hi
+            short_cond = close < lo
 
-        return sig(
-            (c > hi) & (vr > p["vol"]),
-            (c < lo) & (vr > p["vol"]),
-        )
-
-    if name == "zscore":
-        z = (
-            (pd.Series(c)
-             - pd.Series(c).rolling(p["n"]).mean())
-            / pd.Series(c)
-            .rolling(p["n"])
-            .std()
-            .replace(0, np.nan)
-        )
-
-        return sig(
-            z.to_numpy() < -p["thr"],
-            z.to_numpy() > p["thr"],
-        )
-
-    if name == "pullback":
-        r = f["rsi"]
-
-        up = (
-            (f["ema20"] > f["ema50"])
-            & (c > f["ema200"])
-        )
-
-        dn = (
-            (f["ema20"] < f["ema50"])
-            & (c < f["ema200"])
-        )
-
-        return sig(
-            up & (r < p["rsi"]),
-            dn & (r > 100 - p["rsi"]),
-        )
-
-    if name == "breakout":
-        n = p["n"]
-
-        hi = (
-            pd.Series(h)
-            .rolling(n)
-            .max()
-            .shift(1)
-            .to_numpy()
-        )
-
-        lo = (
-            pd.Series(l)
-            .rolling(n)
-            .min()
-            .shift(1)
-            .to_numpy()
-        )
-
-        a = f["atr_pct"]
-
-        base = (
-            pd.Series(a)
-            .rolling(50)
-            .mean()
-            .to_numpy()
-        )
-
-        return sig(
-            (c > hi) & (a > base),
-            (c < lo) & (a > base),
-        )
-
-    raise ValueError(name)
-
-
-def candidates(entry, h1, iv):
-    f = features(entry)
-    m = context(entry, h1, iv)
-
-    out = []
-
-    for name, p in SIGNALS:
-        s = signal(name, p, f)
-
-        label = (
-            name
-            + " "
-            + " ".join(
-                f"{k}={v}"
-                for k, v in p.items()
+        else:
+            atr_pct = (
+                atr14
+                / close
             )
+
+            long_cond = (
+                (close > hi)
+                & (atr_pct >= vol / 10000)
+            )
+
+            short_cond = (
+                (close < lo)
+                & (atr_pct >= vol / 10000)
+            )
+
+        s.loc[long_cond] = 1
+        s.loc[short_cond] = -1
+
+    elif kind == "zscore":
+
+        n = spec["n"]
+        threshold = spec["thr"]
+
+        z = df[f"z{n}"]
+
+        s.loc[z < -threshold] = 1
+        s.loc[z > threshold] = -1
+
+    elif kind == "pullback":
+
+        level = spec["rsi"]
+
+        s.loc[
+            (df["rsi14"] < level)
+            & (close > df["ema20"])
+        ] = 1
+
+        s.loc[
+            (df["rsi14"] > 100 - level)
+            & (close < df["ema20"])
+        ] = -1
+
+    elif kind == "breakout":
+
+        n = spec["n"]
+
+        hi = df[f"dh{n}"]
+        lo = df[f"dl{n}"]
+
+        s.loc[close > hi] = 1
+        s.loc[close < lo] = -1
+
+    return s
+
+
+def apply_regime(df, s, regime):
+    out = s.copy()
+
+    if regime == "all":
+        return out
+
+    trend = df["trend"]
+
+    if regime == "trend":
+        out.loc[
+            ~(
+                ((out == 1) & (trend == 1))
+                |
+                ((out == -1) & (trend == -1))
+            )
+        ] = 0
+
+    elif regime == "range":
+        out.loc[
+            trend != 0
+        ] = 0
+
+    return out
+
+
+# ============================================================
+# CANDIDATES
+# ============================================================
+
+def candidates(entry, higher, iv):
+    df = context(
+        entry,
+        higher,
+        CTX.get(iv, "1h"),
+    )
+
+    df = features(df)
+
+    specs = [
+        (
+            "vwap_n48_k2",
+            {
+                "kind": "vwap",
+                "n": 48,
+                "k": 2,
+            },
+        ),
+        (
+            "vwap_n96_k2",
+            {
+                "kind": "vwap",
+                "n": 96,
+                "k": 2,
+            },
+        ),
+        (
+            "vwap_n48_k3",
+            {
+                "kind": "vwap",
+                "n": 48,
+                "k": 3,
+            },
+        ),
+        (
+            "donchian_n20_v0",
+            {
+                "kind": "donchian",
+                "n": 20,
+                "vol": 0,
+            },
+        ),
+        (
+            "donchian_n20_v1.5",
+            {
+                "kind": "donchian",
+                "n": 20,
+                "vol": 1.5,
+            },
+        ),
+        (
+            "donchian_n50_v1.5",
+            {
+                "kind": "donchian",
+                "n": 50,
+                "vol": 1.5,
+            },
+        ),
+        (
+            "zscore_n30_t2",
+            {
+                "kind": "zscore",
+                "n": 30,
+                "thr": 2,
+            },
+        ),
+        (
+            "zscore_n60_t2.5",
+            {
+                "kind": "zscore",
+                "n": 60,
+                "thr": 2.5,
+            },
+        ),
+        (
+            "pullback_rsi35",
+            {
+                "kind": "pullback",
+                "rsi": 35,
+            },
+        ),
+        (
+            "pullback_rsi40",
+            {
+                "kind": "pullback",
+                "rsi": 40,
+            },
+        ),
+        (
+            "breakout_n20",
+            {
+                "kind": "breakout",
+                "n": 20,
+            },
+        ),
+    ]
+
+    regimes = (
+        "all",
+        "trend",
+        "range",
+    )
+
+    result = []
+
+    for name, spec in specs:
+
+        base_signal = signal(
+            df,
+            spec,
         )
 
-        for reg in REGIMES:
-            x = s.copy()
-            x[~m[reg]] = 0
+        for regime in regimes:
 
-            if np.any(x):
-                out.append(
-                    Candidate(
-                        label,
-                        x,
-                        reg,
-                    )
-                )
+            ss = apply_regime(
+                df,
+                base_signal,
+                regime,
+            )
 
-    return f, out
+            c = Candidate(
+                name=name,
+                signal=ss,
+                regime=regime,
+            )
+
+            result.append(c)
+
+    return df, result
 
 
 # ============================================================
@@ -581,164 +789,205 @@ def candidates(entry, h1, iv):
 # ============================================================
 
 def simulate(
-    L,
-    s,
+    df,
+    sig,
     tp,
     sl,
     hold,
     profile,
     slip,
-    fee_scale=1.0,
-    slip_scale=1.0,
 ):
-    c = L["c"]
-    h = L["h"]
-    l = L["l"]
-    a = L["atr"]
+    """
+    Signal on closed candle.
+    Entry next candle.
 
-    slip *= slip_scale
+    Priority:
+        SL before TP when both touched
+        in same candle.
 
-    maker_tp = profile in (
-        "maker_tp",
-        "maker_both",
-    )
+    No funding.
+    No orderbook.
+    No latency.
+    """
 
-    out = []
-    free = 0
+    if df.empty:
+        return []
 
-    for j in np.flatnonzero(s):
-        if (
-            j < free
-            or j + 1 >= len(c)
-            or not np.isfinite(a[j])
-            or a[j] <= 0
-        ):
+    c = df["close"].to_numpy(dtype=float)
+    h = df["high"].to_numpy(dtype=float)
+    l = df["low"].to_numpy(dtype=float)
+
+    a = df["atr14"].to_numpy(dtype=float)
+    s = sig.to_numpy(dtype=np.int8)
+
+    times = df["time"].to_numpy()
+
+    trades = []
+
+    n = len(df)
+
+    for i in range(n - 1):
+
+        side = int(s[i])
+
+        if side == 0:
             continue
 
-        side = int(s[j])
-        atr = a[j]
+        if not np.isfinite(c[i]):
+            continue
 
-        if profile == "maker_both":
-            if (
-                side == 1
-                and l[j + 1] > c[j] * (1 - TH)
-            ):
-                continue
+        entry_idx = i + 1
 
-            if (
-                side == -1
-                and h[j + 1] < c[j] * (1 + TH)
-            ):
-                continue
+        if entry_idx >= n:
+            break
 
-            entry = c[j]
-            ef = FM * fee_scale
+        entry = c[i]
+
+        if not np.isfinite(entry):
+            continue
+
+        ef = FT
+
+        # ----------------------------------------------------
+        # Approximate maker fill
+        # ----------------------------------------------------
+        if profile in ("maker_tp", "maker_both"):
+
+            if side == 1:
+
+                if l[entry_idx] > c[i] * (1 - TH):
+                    continue
+
+            else:
+
+                if h[entry_idx] < c[i] * (1 + TH):
+                    continue
+
+            entry = c[i]
+            ef = FM
 
         else:
-            entry = (
-                c[j + 1]
-                * (1 + side * slip)
-            )
 
-            ef = FT * fee_scale
+            entry = c[entry_idx]
+            ef = FT
 
-        tp_px = entry + side * tp * atr
-        sl_px = entry - side * sl * atr
+        if not np.isfinite(entry) or entry <= 0:
+            continue
 
-        tp_touch = (
-            tp_px * (1 + side * TH)
-            if maker_tp
-            else tp_px
+        atr_value = a[i]
+
+        if not np.isfinite(atr_value) or atr_value <= 0:
+            continue
+
+        distance = atr_value
+
+        if side == 1:
+
+            tp_price = entry + tp * distance
+            sl_price = entry - sl * distance
+
+        else:
+
+            tp_price = entry - tp * distance
+            sl_price = entry + sl * distance
+
+        exit_idx = min(
+            entry_idx + hold,
+            n - 1,
         )
 
-        end = min(
-            j + hold,
-            len(c) - 1,
-        )
+        exit_price = c[exit_idx]
+        exit_reason = "TIME"
+        xf = FT
 
-        ex = end
-        px = c[end]
-        kind = "time"
+        for j in range(
+            entry_idx,
+            exit_idx + 1,
+        ):
 
-        for k in range(j + 1, end + 1):
-            hit_tp = (
-                h[k] >= tp_touch
-                if side == 1
-                else l[k] <= tp_touch
-            )
+            if side == 1:
 
-            hit_sl = (
-                l[k] <= sl_px
-                if side == 1
-                else h[k] >= sl_px
-            )
+                hit_sl = l[j] <= sl_price
+                hit_tp = h[j] >= tp_price
+
+            else:
+
+                hit_sl = h[j] >= sl_price
+                hit_tp = l[j] <= tp_price
+
+            if hit_sl and hit_tp:
+                # Conservative priority.
+                exit_price = sl_price
+                exit_reason = "SL"
+                break
 
             if hit_sl:
-                ex = k
-                px = (
-                    sl_px
-                    * (1 - side * slip)
-                )
-                kind = "sl"
+                exit_price = sl_price
+                exit_reason = "SL"
                 break
 
             if hit_tp:
-                ex = k
-                px = (
-                    tp_px
-                    if maker_tp
-                    else tp_px * (1 - side * slip)
-                )
-                kind = "tp"
+                exit_price = tp_price
+                exit_reason = "TP"
+
+                if profile == "maker_tp":
+                    xf = FM
+                elif profile == "maker_both":
+                    xf = FM
+
                 break
 
-        if kind == "time":
-            px *= 1 - side * slip
+        # ----------------------------------------------------
+        # Gross return
+        # ----------------------------------------------------
+        if side == 1:
+            gross = (
+                exit_price / entry
+            ) - 1
+        else:
+            gross = (
+                entry / exit_price
+            ) - 1
 
-        xf = (
-            FM
-            if kind == "tp"
-            and profile != "taker"
-            else FT
-        ) * fee_scale
+        # Approximate total costs:
+        # entry fee + exit fee + slippage
+        total_fee = ef + xf
 
-        gross = side * (
-            px - entry
-        ) / entry
+        net = gross - total_fee - slip
 
-        net = (
-            (1 + gross)
-            * (1 - ef)
-            * (1 - xf)
-            - 1
-        )
+        trades.append({
+            "entry_time": pd.Timestamp(
+                times[entry_idx]
+            ),
+            "exit_time": pd.Timestamp(
+                times[
+                    min(
+                        j if 'j' in locals() else exit_idx,
+                        n - 1,
+                    )
+                ]
+            ),
+            "side": side,
+            "entry": entry,
+            "exit": exit_price,
+            "gross": gross,
+            "net": net,
+            "reason": exit_reason,
+        })
 
-        out.append(
-            {
-                "signal_i": j,
-                "entry_i": j + 1,
-                "exit_i": ex,
-                "gross": gross,
-                "net": net,
-                "kind": kind,
-                "side": side,
-                "duration": ex - j,
-            }
-        )
-
-        free = ex + 1
-
-    return out
+    return trades
 
 
-def inside(tr, a, b):
+def inside(trades, start, end):
+    if not trades:
+        return []
+
     return [
-        t
-        for t in tr
+        t for t in trades
         if (
-            a <= t["signal_i"] < b
-            and a <= t["entry_i"] < b
-            and t["exit_i"] < b
+            pd.Timestamp(start)
+            <= pd.Timestamp(t["entry_time"])
+            < pd.Timestamp(end)
         )
     ]
 
@@ -747,397 +996,411 @@ def inside(tr, a, b):
 # STATS
 # ============================================================
 
-def empty():
+def empty_stats():
     return {
-        k: np.nan
-        for k in (
-            "mean",
-            "se",
-            "t",
-            "gross",
-            "fees",
-            "win",
-            "pf",
-            "median",
-            "p25",
-            "p75",
-            "dd",
-            "ret",
-        )
-    } | {"n": 0}
-
-
-def stats(tr):
-    if not tr:
-        return empty()
-
-    n = np.array(
-        [x["net"] for x in tr],
-        float,
-    )
-
-    g = np.array(
-        [x["gross"] for x in tr],
-        float,
-    )
-
-    n = n[np.isfinite(n)]
-    g = g[np.isfinite(g)]
-
-    if not len(n):
-        return empty()
-
-    eq = np.cumprod(1 + n)
-
-    dd = (
-        eq
-        / np.maximum.accumulate(eq)
-        - 1
-    )
-
-    win = n[n > 0]
-    loss = n[n < 0]
-
-    pf = (
-        np.sum(win) / abs(np.sum(loss))
-        if len(loss)
-        else np.inf
-    )
-
-    mean = float(n.mean())
-
-    se = (
-        n.std(ddof=1)
-        / math.sqrt(len(n))
-        if len(n) > 1
-        else np.nan
-    )
-
-    return {
-        "n": len(n),
-        "mean": mean,
-        "se": se,
-        "t": (
-            mean / se
-            if np.isfinite(se) and se > 0
-            else np.nan
-        ),
-        "gross": float(g.mean()),
-        "fees": float(g.mean() - mean),
-        "win": float(np.mean(n > 0)),
-        "pf": pf,
-        "median": float(np.median(n)),
-        "p25": float(np.percentile(n, 25)),
-        "p75": float(np.percentile(n, 75)),
-        "dd": float(dd.min()),
-        "ret": float(eq[-1] - 1),
+        "n": 0,
+        "mean": np.nan,
+        "median": np.nan,
+        "pf": np.nan,
+        "edge": np.nan,
+        "return": np.nan,
+        "dd": np.nan,
+        "wins": 0,
+        "losses": 0,
     }
 
 
-def score(s):
-    if (
-        s["n"] < MIN_TRAIN
-        or not np.isfinite(s["mean"])
-    ):
+def stats(trades):
+    if not trades:
+        return empty_stats()
+
+    x = pd.DataFrame(trades)
+
+    if x.empty:
+        return empty_stats()
+
+    r = pd.to_numeric(
+        x["net"],
+        errors="coerce",
+    ).dropna()
+
+    if r.empty:
+        return empty_stats()
+
+    wins = r[r > 0]
+    losses = r[r < 0]
+
+    gross_profit = wins.sum()
+    gross_loss = -losses.sum()
+
+    if gross_loss > 0:
+        pf = gross_profit / gross_loss
+    else:
+        pf = np.inf if gross_profit > 0 else np.nan
+
+    equity = (1 + r).cumprod()
+
+    peak = equity.cummax()
+
+    dd = (
+        equity / peak
+        - 1
+    ).min()
+
+    # Simple mean edge per trade.
+    edge = r.mean()
+
+    return {
+        "n": int(len(r)),
+        "mean": float(r.mean()),
+        "median": float(r.median()),
+        "pf": float(pf),
+        "edge": float(edge),
+        "return": float(equity.iloc[-1] - 1),
+        "dd": float(dd),
+        "wins": int((r > 0).sum()),
+        "losses": int((r < 0).sum()),
+    }
+
+
+# ============================================================
+# TRAIN SCORE
+# ============================================================
+
+def score(st):
+    n = st["n"]
+
+    if n < MIN_TRAIN:
         return -np.inf
 
-    pf = (
-        2
-        if np.isinf(s["pf"])
-        else np.clip(
-            s["pf"] - 1,
-            -1,
-            2,
-        )
-    )
+    if not finite(st["mean"]):
+        return -np.inf
 
-    mean = np.clip(
-        s["mean"] * 1000,
-        -2,
-        2,
-    )
+    if not finite(st["pf"]):
+        return -np.inf
 
-    dd = np.clip(
-        abs(s["dd"]) * 10,
-        0,
-        2,
-    )
+    if not finite(st["dd"]):
+        return -np.inf
 
-    tc = (
-        np.clip(s["t"], -3, 3) / 3
-        if np.isfinite(s["t"])
-        else 0
-    )
-
-    nc = min(
-        math.log1p(s["n"])
-        / math.log1p(150),
-        1,
-    )
-
+    # Keep the original philosophy:
+    # reward average return and PF,
+    # penalize drawdown,
+    # require sufficient sample size.
+    #
+    # This is only TRAIN selection.
     return (
-        .35 * tc
-        + .30 * pf
-        + .20 * (mean / 2)
-        + .15 * nc
-        - .15 * dd
+        st["mean"] * 1000
+        + math.log1p(max(st["pf"], 0))
+        + st["dd"] * 2
     )
 
 
 # ============================================================
-# BENCHMARKS
+# MONTE CARLO
 # ============================================================
 
 def mc(
     trades,
-    capital,
-    runs,
-    seed,
+    runs=5000,
+    seed=SEED,
 ):
-    if runs <= 0 or len(trades) < 20:
-        return {
-            "enabled": False,
-            "median": np.nan,
-            "p05": np.nan,
-            "p95": np.nan,
-            "dd": np.nan,
-        }
+    if runs <= 0:
+        return {}
+
+    if len(trades) < 20:
+        return {}
 
     r = np.array(
-        [x["net"] for x in trades],
-        float,
+        [
+            float(t["net"])
+            for t in trades
+            if finite(t["net"])
+        ],
+        dtype=float,
     )
 
-    r = r[np.isfinite(r)]
-
     if len(r) < 20:
-        return {
-            "enabled": False,
-            "median": np.nan,
-            "p05": np.nan,
-            "p95": np.nan,
-            "dd": np.nan,
-        }
+        return {}
 
     rng = np.random.default_rng(seed)
 
-    fin = []
-    dds = []
+    finals = []
 
-    for _ in range(int(runs)):
-        x = rng.choice(
+    for _ in range(runs):
+
+        sample = rng.choice(
             r,
-            len(r),
+            size=len(r),
             replace=True,
         )
 
-        eq = capital * np.cumprod(1 + x)
-
-        fin.append(float(eq[-1]))
-
-        dds.append(
-            float(
-                np.min(
-                    eq
-                    / np.maximum.accumulate(eq)
-                    - 1
-                )
-            )
+        equity = np.cumprod(
+            1 + sample
         )
 
+        finals.append(
+            equity[-1]
+        )
+
+    finals = np.asarray(
+        finals,
+        dtype=float,
+    )
+
     return {
-        "enabled": True,
-        "median": float(np.median(fin)),
-        "p05": float(np.percentile(fin, 5)),
-        "p95": float(np.percentile(fin, 95)),
-        "dd": float(np.median(dds)),
+        "mean": float(np.mean(finals) - 1),
+        "median": float(np.median(finals) - 1),
+        "p05": float(np.percentile(finals, 5) - 1),
+        "p95": float(np.percentile(finals, 95) - 1),
     }
 
 
 def random_mc(
     L,
-    s,
+    sig,
     tp,
     sl,
     hold,
     profile,
     slip,
-    a,
-    b,
+    start,
+    end,
+    runs,
     seed,
-    runs=100,
 ):
+    """
+    Random-side benchmark.
+
+    It preserves the signal event timestamps but randomly
+    assigns long/short directions.
+    """
+
     if runs <= 0:
-        return {
-            "mean": np.nan,
-            "se": np.nan,
-            "n": 0,
-            "p05": np.nan,
-            "p95": np.nan,
-        }
+        return {}
 
-    idx = np.flatnonzero(s)
+    rng = np.random.default_rng(seed)
 
-    if not len(idx):
-        return {
-            "mean": np.nan,
-            "se": np.nan,
-            "n": 0,
-            "p05": np.nan,
-            "p95": np.nan,
-        }
+    sig0 = sig.copy()
 
-    vals = []
-    ns = []
+    active = np.flatnonzero(
+        sig0.to_numpy() != 0
+    )
 
-    for i in range(runs):
-        x = np.zeros(
-            len(s),
-            dtype=np.int8,
+    if len(active) < 20:
+        return {}
+
+    results = []
+
+    for _ in range(runs):
+
+        rs = sig0.copy()
+
+        signs = rng.choice(
+            np.array([-1, 1], dtype=np.int8),
+            size=len(active),
         )
 
-        rng = np.random.default_rng(
-            seed + i
+        arr = rs.to_numpy(
+            copy=True
         )
 
-        x[idx] = rng.choice(
-            [-1, 1],
-            len(idx),
+        arr[active] = signs
+
+        random_signal = pd.Series(
+            arr,
+            index=rs.index,
         )
 
-        z = stats(
-            inside(
-                simulate(
-                    L,
-                    x,
-                    tp,
-                    sl,
-                    hold,
-                    profile,
-                    slip,
-                ),
-                a,
-                b,
-            )
+        tr = simulate(
+            L,
+            random_signal,
+            tp,
+            sl,
+            hold,
+            profile,
+            slip,
         )
 
-        if np.isfinite(z["mean"]):
-            vals.append(z["mean"])
-            ns.append(z["n"])
+        tr = inside(
+            tr,
+            start,
+            end,
+        )
 
-    if not vals:
-        return {
-            "mean": np.nan,
-            "se": np.nan,
-            "n": 0,
-            "p05": np.nan,
-            "p95": np.nan,
-        }
+        st = stats(tr)
 
-    x = np.array(vals)
+        if st["n"] > 0:
+
+            results.append({
+                "mean": st["mean"],
+                "pf": st["pf"],
+                "edge": st["edge"],
+            })
+
+    if not results:
+        return {}
+
+    x = pd.DataFrame(results)
 
     return {
-        "mean": float(x.mean()),
-        "se": (
-            float(
-                x.std(ddof=1)
-                / math.sqrt(len(x))
-            )
-            if len(x) > 1
-            else np.nan
-        ),
-        "n": int(round(np.mean(ns))),
-        "p05": float(np.percentile(x, 5)),
-        "p95": float(np.percentile(x, 95)),
+        "mean": float(x["mean"].mean()),
+        "median": float(x["mean"].median()),
+        "pf": float(x["pf"].median()),
+        "edge": float(x["edge"].median()),
     }
 
 
-def buyhold(L, a, b):
-    if b <= a + 1:
-        return []
+# ============================================================
+# FIXED / BUY & HOLD
+# ============================================================
 
-    e = L["c"][a]
-    x = L["c"][b - 1]
+def fixed(trades):
+    st = stats(trades)
 
-    if not np.isfinite(e) or e <= 0:
-        return []
+    return st
 
-    g = x / e - 1
 
-    net = (
-        (1 + g)
+def buyhold(df):
+    if df.empty:
+        return np.nan
+
+    r = (
+        df["close"].iloc[-1]
+        / df["close"].iloc[0]
+        - 1
+    )
+
+    return float(
+        (1 + r)
         * (1 - FT) ** 2
         - 1
     )
 
-    return [
-        {
-            "signal_i": a,
-            "entry_i": a,
-            "exit_i": b - 1,
-            "gross": g,
-            "net": net,
-        }
-    ]
-
 
 # ============================================================
-# WALK FORWARD
+# WALK-FORWARD FOLDS
 # ============================================================
 
-def folds(n, iv):
-    bars = 86400000 // MS[iv]
+def folds(
+    start,
+    end,
+):
+    """
+    TRAIN / TEST rolling walk-forward.
 
-    tr = TRAIN * bars
-    te = TEST * bars
+    Durations are expressed in days.
+    """
 
-    usable = n - HOLD * bars
+    start = pd.Timestamp(
+        start,
+        tz="UTC",
+    )
+
+    end = pd.Timestamp(
+        end,
+        tz="UTC",
+    )
 
     out = []
-    s = 0
 
-    while s + tr + te <= usable:
+    tr = pd.Timedelta(
+        days=TRAIN
+    )
+
+    te = pd.Timedelta(
+        days=TEST
+    )
+
+    step = pd.Timedelta(
+        days=STEP
+    )
+
+    cursor = start + tr
+
+    while cursor + te <= end:
+
+        tr0 = cursor - tr
+        tr1 = cursor
+
+        te0 = cursor
+        te1 = cursor + te
+
         out.append(
             (
-                s,
-                s + tr,
-                s + tr,
-                s + tr + te,
+                tr0,
+                tr1,
+                te0,
+                te1,
             )
         )
 
-        s += STEP * bars
+        cursor += step
 
-    return out, usable
+    return out
 
 
-def finite_median(x):
+# ============================================================
+# MEDIAN
+# ============================================================
+
+def finite_median(series):
     x = pd.to_numeric(
-        x,
+        series,
         errors="coerce",
     )
 
     x = x[np.isfinite(x)]
 
-    return (
-        float(np.median(x))
-        if len(x)
-        else np.nan
-    )
+    if len(x) == 0:
+        return np.nan
+
+    return float(x.median())
 
 
 # ============================================================
-# ROBUSTESSE
+# V4.3 ROBUSTNESS
 # ============================================================
 
 def robustness(wf):
-    if wf.empty:
+    """
+    IMPORTANT:
+
+    wf must contain every fixed configuration on every fold.
+
+    active_folds therefore means:
+    number of OOS folds in which this configuration
+    actually generated at least one trade.
+
+    It does NOT mean number of folds won.
+    """
+
+    if wf is None or wf.empty:
         return pd.DataFrame()
 
-    oos = wf[wf.fold != "FINAL"]
+    x = wf.copy()
 
-    if oos.empty:
-        return pd.DataFrame()
+    x["train_eligible"] = (
+        x["train_eligible"]
+        .fillna(False)
+        .astype(bool)
+    )
+
+    for col in [
+        "test_n",
+        "test_mean",
+        "test_pf",
+        "test_edge",
+        "test_dd",
+    ]:
+        x[col] = pd.to_numeric(
+            x[col],
+            errors="coerce",
+        )
+
+    x["test_n"] = (
+        x["test_n"]
+        .fillna(0)
+    )
 
     cols = [
         "symbol",
@@ -1150,200 +1413,219 @@ def robustness(wf):
         "hold",
     ]
 
-    out = []
+    rows = []
 
-    for key, g in oos.groupby(
+    for key, g0 in x.groupby(
         cols,
         dropna=False,
     ):
-        test_n = pd.to_numeric(
-            g.test_n,
-            errors="coerce",
-        ).fillna(0)
 
-        active = g[test_n > 0]
+        g = g0[
+            g0["train_eligible"]
+        ].copy()
 
-        means = pd.to_numeric(
-            active.test_mean,
-            errors="coerce",
-        )
-
-        means = means[
-            np.isfinite(means)
-        ]
-
-        if not len(means):
+        if g.empty:
             continue
 
-        edges = pd.to_numeric(
-            active.edge_vs_random,
-            errors="coerce",
+        active = g[
+            g["test_n"] > 0
+        ].copy()
+
+        eligible_folds = len(g)
+        active_folds = len(active)
+
+        total_trades = int(
+            active["test_n"].sum()
         )
 
-        edges = edges[
-            np.isfinite(edges)
-        ]
+        if active_folds:
 
-        pf = finite_median(
-            active.test_pf
-        )
-
-        dd = finite_median(
-            active.test_dd
-        )
-
-        pos = float(
-            np.mean(means > 0)
-        )
-
-        beat = (
-            float(np.mean(edges > 0))
-            if len(edges)
-            else 0
-        )
-
-        mededge = (
-            float(np.median(edges))
-            if len(edges)
-            else np.nan
-        )
-
-        mean = float(means.mean())
-
-        std = (
-            float(means.std(ddof=1))
-            if len(means) > 1
-            else np.nan
-        )
-
-        t = (
-            mean
-            / (std / math.sqrt(len(means)))
-            if np.isfinite(std)
-            and std > 0
-            else np.nan
-        )
-
-        nf = len(active)
-
-        nt = int(
-            pd.to_numeric(
-                active.test_n,
-                errors="coerce",
+            means = (
+                active["test_mean"]
+                .dropna()
             )
-            .fillna(0)
-            .sum()
-        )
 
-        stability = (
-            pos + beat
-        ) / 2
-
-        pfc = (
-            np.clip(
-                pf - 1,
-                -1,
-                2,
+            pfs = (
+                active["test_pf"]
+                .dropna()
             )
-        )
 
-        pfc = (
-            (pfc + 1) / 3
-            if np.isfinite(pf)
-            else 0
-        )
-
-        ec = np.clip(
-            mededge,
-            -0.01,
-            0.01,
-        )
-
-        ec = (
-            (ec + 0.01) / 0.02
-            if np.isfinite(mededge)
-            else 0
-        )
-
-        sample = min(
-            1,
-            nt / 200,
-        )
-
-        fold = min(
-            1,
-            nf / 10,
-        )
-
-        consistency = (
-            max(
-                0,
-                1 - min(std / 0.01, 1),
+            edges = (
+                active["test_edge"]
+                .dropna()
             )
-            if np.isfinite(std)
-            and std > 0
-            else 0
-        )
 
-        rs = (
-            .25 * stability
-            + .18 * pfc
-            + .18 * ec
-            + .12 * sample
-            + .12 * fold
-            + .15 * consistency
-        )
+            dds = (
+                active["test_dd"]
+                .dropna()
+            )
+
+            mean_oos = (
+                float(means.mean())
+                if len(means)
+                else np.nan
+            )
+
+            median_oos = (
+                float(means.median())
+                if len(means)
+                else np.nan
+            )
+
+            positive_ratio = (
+                float(
+                    (means > 0).mean()
+                )
+                if len(means)
+                else np.nan
+            )
+
+            median_pf = (
+                float(pfs.median())
+                if len(pfs)
+                else np.nan
+            )
+
+            median_dd = (
+                float(dds.median())
+                if len(dds)
+                else np.nan
+            )
+
+            mean_edge = (
+                float(edges.mean())
+                if len(edges)
+                else np.nan
+            )
+
+            median_edge = (
+                float(edges.median())
+                if len(edges)
+                else np.nan
+            )
+
+            beat_random_ratio = (
+                float(
+                    (edges > 0).mean()
+                )
+                if len(edges)
+                else np.nan
+            )
+
+        else:
+
+            mean_oos = np.nan
+            median_oos = np.nan
+            positive_ratio = np.nan
+            median_pf = np.nan
+            median_dd = np.nan
+            mean_edge = np.nan
+            median_edge = np.nan
+            beat_random_ratio = np.nan
 
         robust = (
-            nf >= MIN_FOLDS
-            and nt >= MIN_TRADES
-            and pos >= MIN_POS
-            and beat >= MIN_RANDOM
-            and np.isfinite(pf)
-            and pf >= MIN_PF
-            and np.isfinite(mededge)
-            and mededge >= MIN_EDGE
+            eligible_folds >= MIN_FOLDS
+            and active_folds >= MIN_FOLDS
+            and total_trades >= MIN_TRADES
+            and finite(mean_oos)
+            and finite(median_oos)
+            and finite(positive_ratio)
+            and finite(median_pf)
+            and finite(median_dd)
+            and finite(mean_edge)
+            and finite(median_edge)
+            and positive_ratio >= MIN_POS
+            and beat_random_ratio >= MIN_RANDOM
+            and median_pf >= MIN_PF
+            and mean_edge >= MIN_EDGE
         )
 
-        out.append(
-            dict(
-                zip(cols, key),
-                active_folds=nf,
-                total_folds=int(len(g)),
-                total_trades=nt,
-                mean_oos=mean,
-                median_oos=float(
-                    np.median(means)
-                ),
-                std_oos=std,
-                t_oos=t,
-                positive_fold_ratio=pos,
-                beat_random_ratio=beat,
-                median_pf=pf,
-                median_dd=dd,
-                mean_edge_random=(
-                    float(edges.mean())
-                    if len(edges)
-                    else np.nan
-                ),
-                median_edge_random=mededge,
-                robustness_score=rs,
-                robust=robust,
-            )
+        row = dict(
+            zip(cols, key)
         )
 
-    return pd.DataFrame(out)
+        row.update({
+            "eligible_folds":
+                eligible_folds,
 
+            "active_folds":
+                active_folds,
 
-# ============================================================
-# GLOBAL
-# ============================================================
+            "zero_trade_folds":
+                eligible_folds - active_folds,
 
-def global_robust(r):
-    if r.empty:
+            "total_trades":
+                total_trades,
+
+            "mean_oos":
+                mean_oos,
+
+            "median_oos":
+                median_oos,
+
+            "positive_fold_ratio":
+                positive_ratio,
+
+            "beat_random_ratio":
+                beat_random_ratio,
+
+            "median_pf":
+                median_pf,
+
+            "median_dd":
+                median_dd,
+
+            "mean_edge":
+                mean_edge,
+
+            "median_edge":
+                median_edge,
+
+            "robust":
+                bool(robust),
+        })
+
+        rows.append(row)
+
+    if not rows:
         return pd.DataFrame()
 
-    cols = [
+    out = pd.DataFrame(rows)
+
+    return out.sort_values(
+        [
+            "robust",
+            "median_oos",
+            "median_pf",
+            "active_folds",
+            "total_trades",
+        ],
+        ascending=[
+            False,
+            False,
+            False,
+            False,
+            False,
+        ],
+    ).reset_index(drop=True)
+
+
+# ============================================================
+# GLOBAL ROBUSTNESS
+# ============================================================
+
+def global_robust(rob):
+    if rob is None or rob.empty:
+        return pd.DataFrame()
+
+    x = rob[
+        rob["robust"] == True
+    ].copy()
+
+    if x.empty:
+        return pd.DataFrame()
+
+    group_cols = [
         "interval",
         "signal",
         "regime",
@@ -1353,831 +1635,1085 @@ def global_robust(r):
         "hold",
     ]
 
-    out = []
+    rows = []
 
-    for key, g in r.groupby(
-        cols,
+    for key, g in x.groupby(
+        group_cols,
         dropna=False,
     ):
-        out.append(
-            dict(
-                zip(cols, key),
-                symbols=g.symbol.nunique(),
-                robust_symbols=int(
-                    g.robust.sum()
-                ),
-                total_trades=int(
-                    g.total_trades.sum()
-                ),
-                mean_oos=float(
-                    g.mean_oos.mean()
-                ),
-                positive_fold_ratio=float(
-                    g.positive_fold_ratio.mean()
-                ),
-                beat_random_ratio=float(
-                    g.beat_random_ratio.mean()
-                ),
-                median_pf=finite_median(
-                    g.median_pf
-                ),
-                median_edge_random=finite_median(
-                    g.median_edge_random
-                ),
-            )
+
+        symbols = sorted(
+            g["symbol"]
+            .astype(str)
+            .unique()
         )
 
-    x = pd.DataFrame(out)
+        row = dict(
+            zip(group_cols, key)
+        )
 
-    x["global_robust"] = (
-        (x.symbols >= 3)
-        & (x.robust_symbols >= 2)
-        & (x.total_trades >= 150)
-        & (x.positive_fold_ratio >= 0.5)
-        & (x.beat_random_ratio >= 0.5)
-        & (x.median_pf >= 1)
-        & (x.median_edge_random >= 0)
+        row.update({
+            "symbols":
+                ",".join(symbols),
+
+            "symbol_count":
+                len(symbols),
+
+            "mean_oos":
+                g["mean_oos"].mean(),
+
+            "median_oos":
+                g["median_oos"].median(),
+
+            "median_pf":
+                g["median_pf"].median(),
+
+            "mean_edge":
+                g["mean_edge"].mean(),
+
+            "total_trades":
+                int(g["total_trades"].sum()),
+
+            "robust_symbols":
+                len(symbols),
+        })
+
+        rows.append(row)
+
+    return pd.DataFrame(rows).sort_values(
+        [
+            "robust_symbols",
+            "median_oos",
+            "median_pf",
+        ],
+        ascending=[
+            False,
+            False,
+            False,
+        ],
     )
 
-    return x.sort_values(
-        [
-            "global_robust",
-            "median_edge_random",
-            "median_pf",
-            "total_trades",
-        ],
-        ascending=False,
-    ).reset_index(drop=True)
+
+# ============================================================
+# V4.3 WF ENGINE
+# ============================================================
+
+def evaluate_walk_forward_v43(
+    L,
+    cands,
+    sym,
+    iv,
+    fs,
+    random_runs=0,
+):
+    """
+    Evaluate EVERY fixed configuration on EVERY fold.
+    """
+
+    slip = SLIP.get(
+        sym,
+        0.0003,
+    )
+
+    configs = []
+
+    for ci, c in enumerate(cands):
+
+        for tp, sl, hold in EXITS:
+
+            for prof in PROFILES:
+
+                configs.append({
+                    "ci": ci,
+                    "c": c,
+                    "tp": tp,
+                    "sl": sl,
+                    "hold": hold,
+                    "prof": prof,
+                })
+
+    print(
+        f"[{sym}] CONFIGURATIONS = "
+        f"{len(configs)} | "
+        f"FOLDS = {len(fs)} | "
+        f"RANDOM = {random_runs}",
+        flush=True,
+    )
+
+    # --------------------------------------------------------
+    # Precompute every simulation once.
+    # --------------------------------------------------------
+
+    cache = {}
+
+    checkpoint = max(
+        1,
+        len(configs) // 4,
+    )
+
+    for no, cfg in enumerate(
+        configs,
+        1,
+    ):
+
+        key = (
+            cfg["ci"],
+            cfg["tp"],
+            cfg["sl"],
+            cfg["hold"],
+            cfg["prof"],
+        )
+
+        cache[key] = simulate(
+            L,
+            cfg["c"].signal,
+            cfg["tp"],
+            cfg["sl"],
+            cfg["hold"],
+            cfg["prof"],
+            slip,
+        )
+
+        if (
+            no == 1
+            or no % checkpoint == 0
+            or no == len(configs)
+        ):
+            print(
+                f"[{sym}] CACHE "
+                f"{no}/{len(configs)}",
+                flush=True,
+            )
+
+    all_rows = []
+    selected_rows = []
+
+    # --------------------------------------------------------
+    # Every fold
+    # --------------------------------------------------------
+
+    for fi, (
+        tr0,
+        tr1,
+        te0,
+        te1,
+    ) in enumerate(
+        fs,
+        1,
+    ):
+
+        print(
+            f"[{sym}] FOLD "
+            f"{fi}/{len(fs)} "
+            f"TRAIN={tr0.date()}->{tr1.date()} "
+            f"TEST={te0.date()}->{te1.date()}",
+            flush=True,
+        )
+
+        best = None
+        fold_rows = []
+
+        for cfg_no, cfg in enumerate(
+            configs,
+            1,
+        ):
+
+            key = (
+                cfg["ci"],
+                cfg["tp"],
+                cfg["sl"],
+                cfg["hold"],
+                cfg["prof"],
+            )
+
+            trades = cache[key]
+
+            tr = inside(
+                trades,
+                tr0,
+                tr1,
+            )
+
+            tt = inside(
+                trades,
+                te0,
+                te1,
+            )
+
+            tr_st = stats(tr)
+            te_st = stats(tt)
+
+            train_score = score(
+                tr_st
+            )
+
+            train_eligible = (
+                tr_st["n"] >= MIN_TRAIN
+                and finite(train_score)
+            )
+
+            random_mean = np.nan
+            random_median = np.nan
+            random_pf = np.nan
+            random_edge = np.nan
+
+            # Disabled in the first V4.3 run.
+            if (
+                random_runs > 0
+                and train_eligible
+                and te_st["n"] > 0
+            ):
+
+                try:
+
+                    rr = random_mc(
+                        L,
+                        cfg["c"].signal,
+                        cfg["tp"],
+                        cfg["sl"],
+                        cfg["hold"],
+                        cfg["prof"],
+                        slip,
+                        te0,
+                        te1,
+                        random_runs,
+                        SEED
+                        + fi
+                        + cfg_no,
+                    )
+
+                    if rr:
+
+                        random_mean = rr.get(
+                            "mean",
+                            np.nan,
+                        )
+
+                        random_median = rr.get(
+                            "median",
+                            np.nan,
+                        )
+
+                        random_pf = rr.get(
+                            "pf",
+                            np.nan,
+                        )
+
+                        random_edge = rr.get(
+                            "edge",
+                            np.nan,
+                        )
+
+                except Exception as e:
+
+                    print(
+                        f"[{sym}] RANDOM ERROR "
+                        f"fold={fi} "
+                        f"cfg={cfg_no}: {e}",
+                        flush=True,
+                    )
+
+            row = {
+                "symbol": sym,
+                "interval": iv,
+                "fold": fi,
+
+                "train_start": tr0,
+                "train_end": tr1,
+
+                "test_start": te0,
+                "test_end": te1,
+
+                "ci": cfg["ci"],
+
+                "signal":
+                    cfg["c"].name,
+
+                "regime":
+                    cfg["c"].regime,
+
+                "profile":
+                    cfg["prof"],
+
+                "tp":
+                    cfg["tp"],
+
+                "sl":
+                    cfg["sl"],
+
+                "hold":
+                    cfg["hold"],
+
+                "train_eligible":
+                    bool(train_eligible),
+
+                "selected":
+                    False,
+
+                "train_n":
+                    tr_st["n"],
+
+                "train_mean":
+                    tr_st["mean"],
+
+                "train_pf":
+                    tr_st["pf"],
+
+                "train_edge":
+                    tr_st["edge"],
+
+                "train_return":
+                    tr_st["return"],
+
+                "train_dd":
+                    tr_st["dd"],
+
+                "test_n":
+                    te_st["n"],
+
+                "test_mean":
+                    te_st["mean"],
+
+                "test_pf":
+                    te_st["pf"],
+
+                "test_edge":
+                    te_st["edge"],
+
+                "test_return":
+                    te_st["return"],
+
+                "test_dd":
+                    te_st["dd"],
+
+                "random_mean":
+                    random_mean,
+
+                "random_median":
+                    random_median,
+
+                "random_pf":
+                    random_pf,
+
+                "random_edge":
+                    random_edge,
+
+                "train_score":
+                    train_score,
+            }
+
+            fold_rows.append(row)
+
+            if train_eligible:
+
+                if (
+                    best is None
+                    or train_score
+                    > best["score"]
+                ):
+
+                    best = {
+                        "score":
+                            train_score,
+
+                        "row_index":
+                            len(fold_rows) - 1,
+
+                        "cfg":
+                            cfg,
+                    }
+
+        # ----------------------------------------------------
+        # Mark train winner.
+        # ----------------------------------------------------
+
+        if best is not None:
+
+            selected = fold_rows[
+                best["row_index"]
+            ]
+
+            selected["selected"] = True
+
+            selected_rows.append(
+                dict(selected)
+            )
+
+            print(
+                f"[{sym}] FOLD "
+                f"{fi}/{len(fs)} DONE | "
+                f"WINNER={selected['signal']} | "
+                f"{selected['regime']} | "
+                f"{selected['profile']} | "
+                f"TP={selected['tp']} "
+                f"SL={selected['sl']} "
+                f"H={selected['hold']} | "
+                f"TRAIN_N={selected['train_n']} | "
+                f"TEST_N={selected['test_n']}",
+                flush=True,
+            )
+
+        else:
+
+            print(
+                f"[{sym}] FOLD "
+                f"{fi}/{len(fs)} DONE | "
+                f"NO ELIGIBLE CONFIG",
+                flush=True,
+            )
+
+        all_rows.extend(
+            fold_rows
+        )
+
+    print(
+        f"[{sym}] WF COMPLETE | "
+        f"ROWS={len(all_rows)} | "
+        f"SELECTED={len(selected_rows)}",
+        flush=True,
+    )
+
+    return (
+        all_rows,
+        selected_rows,
+    )
+
+
+# ============================================================
+# HOLDOUT
+# ============================================================
+
+def run_holdout(
+    L,
+    cands,
+    sym,
+    iv,
+    start,
+    end,
+    robust_df,
+):
+    if (
+        robust_df is None
+        or robust_df.empty
+    ):
+        return []
+
+    r = robust_df[
+        (robust_df["symbol"] == sym)
+        & (robust_df["interval"] == iv)
+        & (robust_df["robust"] == True)
+    ].copy()
+
+    if r.empty:
+        return []
+
+    # Take the first robust configuration for this asset.
+    r = r.iloc[0]
+
+    target = None
+
+    for ci, c in enumerate(cands):
+
+        if c.name != r["signal"]:
+            continue
+
+        if c.regime != r["regime"]:
+            continue
+
+        target = (
+            ci,
+            c,
+        )
+        break
+
+    if target is None:
+        return []
+
+    ci, c = target
+
+    trades = simulate(
+        L,
+        c.signal,
+        float(r["tp"]),
+        float(r["sl"]),
+        int(r["hold"]),
+        r["profile"],
+        SLIP.get(sym, 0.0003),
+    )
+
+    h = inside(
+        trades,
+        start,
+        end,
+    )
+
+    st = stats(h)
+
+    return [{
+        "symbol": sym,
+        "interval": iv,
+        "signal": c.name,
+        "regime": c.regime,
+        "profile": r["profile"],
+        "tp": r["tp"],
+        "sl": r["sl"],
+        "hold": r["hold"],
+        "holdout_start": start,
+        "holdout_end": end,
+        "holdout_n": st["n"],
+        "holdout_mean": st["mean"],
+        "holdout_pf": st["pf"],
+        "holdout_edge": st["edge"],
+        "holdout_return": st["return"],
+        "holdout_dd": st["dd"],
+    }]
 
 
 # ============================================================
 # MAIN
 # ============================================================
 
-def pct(x):
-    try:
-        x = float(x)
-    except Exception:
-        return "nan"
-
-    return (
-        f"{x * 100:+.4f}%"
-        if np.isfinite(x)
-        else "nan"
-    )
-
-
-def num(x, d=2):
-    try:
-        x = float(x)
-    except Exception:
-        return "nan"
-
-    return (
-        f"{x:.{d}f}"
-        if np.isfinite(x)
-        else "nan"
-    )
-
-
 def main():
-    ap = argparse.ArgumentParser()
 
-    ap.add_argument(
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
         "--symbols",
-        default="BTCUSDT,ETHUSDT,SOLUSDT",
+        nargs="+",
+        default=[
+            "BTCUSDT",
+            "ETHUSDT",
+            "SOLUSDT",
+        ],
     )
 
-    ap.add_argument(
+    parser.add_argument(
         "--intervals",
-        default="5m,15m",
+        nargs="+",
+        default=["1h"],
     )
 
-    ap.add_argument(
+    parser.add_argument(
         "--days",
         type=int,
         default=730,
     )
 
-    ap.add_argument(
+    parser.add_argument(
         "--capital",
         type=float,
-        default=CAPITAL,
+        default=100.0,
     )
 
-    ap.add_argument(
+    parser.add_argument(
         "--mc-runs",
         type=int,
-        default=MC_RUNS,
+        default=0,
     )
 
-    a = ap.parse_args()
-
-    t0 = time.time()
-
-    out = Path("results")
-    out.mkdir(exist_ok=True)
-
-    files = [
-        "walk_forward_v43.csv",
-        "robustness_v43.csv",
-        "global_v43.csv",
-        "coverage_v43.csv",
-        "selection_v43.csv",
-        "holdout_v43.csv",
-        "summary_v43.md",
-    ]
-
-    for f in files:
-        p = out / f
-        if p.exists():
-            p.unlink()
-
-    syms = [
-        x.strip()
-        for x in a.symbols.split(",")
-        if x.strip()
-    ]
-
-    ivs = [
-        x.strip()
-        for x in a.intervals.split(",")
-        if x.strip()
-    ]
-
-    end = int(
-        time.time() * 1000
+    parser.add_argument(
+        "--random-runs",
+        type=int,
+        default=RANDOM_RUNS,
     )
 
-    start = (
-        end
-        - a.days * 86400000
+    args = parser.parse_args()
+
+    global CAPITAL
+    CAPITAL = args.capital
+
+    random.seed(SEED)
+    np.random.seed(SEED)
+
+    Path("results").mkdir(
+        parents=True,
+        exist_ok=True,
     )
 
-    rows = []
-    selection_rows = []
-    coverage_rows = []
-    holds = []
+    all_wf_rows = []
+    all_selected_rows = []
+    all_rob_rows = []
+    all_holdout_rows = []
 
     print(
-        f"V4.3 | {','.join(syms)} | "
-        f"{','.join(ivs)} | "
-        f"{a.days}j | MC={a.mc_runs}"
+        "==============================================",
+        flush=True,
     )
 
-    for iv in ivs:
-        for sym in syms:
+    print(
+        "SCALP LAB V4.3",
+        flush=True,
+    )
 
-            tic = time.time()
+    print(
+        "==============================================",
+        flush=True,
+    )
 
-            ctx = CTX.get(
+    print(
+        f"Symbols : "
+        f"{' '.join(args.symbols)}",
+        flush=True,
+    )
+
+    print(
+        f"Intervals: "
+        f"{' '.join(args.intervals)}",
+        flush=True,
+    )
+
+    print(
+        f"History : {args.days} days",
+        flush=True,
+    )
+
+    print(
+        f"MC runs : {args.mc_runs}",
+        flush=True,
+    )
+
+    print(
+        f"Random  : {args.random_runs}",
+        flush=True,
+    )
+
+    print(
+        f"WF      : "
+        f"{TRAIN} / {TEST} / {STEP} days",
+        flush=True,
+    )
+
+    print(
+        f"Holdout : {HOLD} days",
+        flush=True,
+    )
+
+    print(
+        "==============================================",
+        flush=True,
+    )
+
+    for iv in args.intervals:
+
+        if iv not in MS:
+            raise ValueError(
+                f"Unsupported interval: {iv}"
+            )
+
+        for sym in args.symbols:
+
+            print(
+                "",
+                flush=True,
+            )
+
+            print(
+                "==============================================",
+                flush=True,
+            )
+
+            print(
+                f"START {sym} {iv}",
+                flush=True,
+            )
+
+            print(
+                "==============================================",
+                flush=True,
+            )
+
+            # ------------------------------------------------
+            # Entry timeframe
+            # ------------------------------------------------
+
+            entry = fetch(
+                sym,
+                iv,
+                args.days,
+            )
+
+            # ------------------------------------------------
+            # Higher timeframe context
+            # ------------------------------------------------
+
+            ctx_iv = CTX.get(
                 iv,
                 "1h",
             )
 
-            entry = frame(
-                fetch(
-                    sym,
-                    iv,
-                    start,
-                    end,
-                )
-            )
-
-            h1 = frame(
-                fetch(
-                    sym,
-                    ctx,
-                    start
-                    - WARM.get(
-                        ctx,
-                        12,
-                    ) * 86400000,
-                    end,
-                )
-            )
-
-            minbars = int(
-                (
-                    TRAIN
-                    + TEST
-                    + HOLD
-                )
-                * 86400000
-                / MS[iv]
-                * 0.5
-            )
-
-            if (
-                len(entry) < minbars
-                or len(h1) < 200
-            ):
-                print(
-                    f"{sym} {iv} | "
-                    f"SKIP data "
-                    f"{len(entry)}/"
-                    f"{len(h1)}"
-                )
-                continue
-
-            entry = (
-                entry[
-                    entry.time >= start
-                ]
-                .reset_index(drop=True)
-            )
-
-            fs, hs = folds(
-                len(entry),
-                iv,
+            higher = fetch(
+                sym,
+                ctx_iv,
+                args.days + WARM.get(
+                    ctx_iv,
+                    40,
+                ),
             )
 
             L, cands = candidates(
                 entry,
-                h1,
-                ctx,
+                higher,
+                iv,
             )
 
             print(
-                f"{sym} {iv} | "
-                f"cand={len(cands)} "
-                f"folds={len(fs)}"
+                f"[{sym}] candidates="
+                f"{len(cands)}",
+                flush=True,
             )
 
             # ------------------------------------------------
-            # ALL CONFIGURATIONS / ALL FOLDS
+            # WF dates
             # ------------------------------------------------
 
-            for fi, (
-                tr0,
-                tr1,
-                te0,
-                te1,
-            ) in enumerate(
-                fs,
-                1,
-            ):
+            start = L["time"].min()
+            end = L["time"].max()
 
-                best = None
-
-                for ci, c in enumerate(
-                    cands
-                ):
-
-                    for tp, sl, hold in EXITS:
-
-                        for prof in PROFILES:
-
-                            full_trades = simulate(
-                                L,
-                                c.signal,
-                                tp,
-                                sl,
-                                hold,
-                                prof,
-                                SLIP.get(
-                                    sym,
-                                    0.0003,
-                                ),
-                            )
-
-                            tr = inside(
-                                full_trades,
-                                tr0,
-                                tr1,
-                            )
-
-                            tt = inside(
-                                full_trades,
-                                te0,
-                                te1,
-                            )
-
-                            train_stats = stats(
-                                tr
-                            )
-
-                            test_stats = stats(
-                                tt
-                            )
-
-                            sc = score(
-                                train_stats
-                            )
-
-                            rm = random_mc(
-                                L,
-                                c.signal,
-                                tp,
-                                sl,
-                                hold,
-                                prof,
-                                SLIP.get(
-                                    sym,
-                                    0.0003,
-                                ),
-                                te0,
-                                te1,
-                                SEED
-                                + fi * 1000
-                                + ci,
-                                RANDOM_RUNS,
-                            )
-
-                            edge = (
-                                test_stats["mean"]
-                                - rm["mean"]
-                                if np.isfinite(
-                                    test_stats["mean"]
-                                )
-                                and np.isfinite(
-                                    rm["mean"]
-                                )
-                                else np.nan
-                            )
-
-                            rows.append(
-                                {
-                                    "symbol": sym,
-                                    "interval": iv,
-                                    "fold": fi,
-                                    "candidate": ci,
-                                    "signal": c.name,
-                                    "regime": c.regime,
-                                    "profile": prof,
-                                    "tp": tp,
-                                    "sl": sl,
-                                    "hold": hold,
-
-                                    "train_n":
-                                        train_stats["n"],
-                                    "train_mean":
-                                        train_stats["mean"],
-                                    "train_pf":
-                                        train_stats["pf"],
-
-                                    "test_n":
-                                        test_stats["n"],
-                                    "test_gross":
-                                        test_stats["gross"],
-                                    "test_mean":
-                                        test_stats["mean"],
-                                    "test_se":
-                                        test_stats["se"],
-                                    "test_t":
-                                        test_stats["t"],
-                                    "test_fees":
-                                        test_stats["fees"],
-                                    "test_win":
-                                        test_stats["win"],
-                                    "test_pf":
-                                        test_stats["pf"],
-                                    "test_median":
-                                        test_stats["median"],
-                                    "test_p25":
-                                        test_stats["p25"],
-                                    "test_p75":
-                                        test_stats["p75"],
-                                    "test_dd":
-                                        test_stats["dd"],
-                                    "test_return":
-                                        test_stats["ret"],
-
-                                    "bench_random_mean":
-                                        rm["mean"],
-                                    "bench_random_se":
-                                        rm["se"],
-                                    "bench_random_p05":
-                                        rm["p05"],
-                                    "bench_random_p95":
-                                        rm["p95"],
-                                    "bench_random_n":
-                                        rm["n"],
-
-                                    "edge_vs_random":
-                                        edge,
-
-                                    "train_score":
-                                        sc,
-
-                                    "signal_count_train":
-                                        int(
-                                            np.count_nonzero(
-                                                c.signal[
-                                                    tr0:tr1
-                                                ]
-                                            )
-                                        ),
-
-                                    "signal_count_test":
-                                        int(
-                                            np.count_nonzero(
-                                                c.signal[
-                                                    te0:te1
-                                                ]
-                                            )
-                                        ),
-                                }
-                            )
-
-                            # meilleur candidat TRAIN
-                            if (
-                                best is None
-                                or sc > best["score"]
-                            ):
-                                best = {
-                                    "ci": ci,
-                                    "c": c,
-                                    "tp": tp,
-                                    "sl": sl,
-                                    "hold": hold,
-                                    "prof": prof,
-                                    "score": sc,
-                                    "tr": train_stats,
-                                }
-
-                # --------------------------------------------
-                # WINNER OF THIS FOLD
-                # --------------------------------------------
-
-                if best is not None:
-
-                    selection_rows.append(
-                        {
-                            "symbol": sym,
-                            "interval": iv,
-                            "fold": fi,
-                            "candidate": best["ci"],
-                            "signal": best["c"].name,
-                            "regime": best["c"].regime,
-                            "profile": best["prof"],
-                            "tp": best["tp"],
-                            "sl": best["sl"],
-                            "hold": best["hold"],
-                            "train_n":
-                                best["tr"]["n"],
-                            "train_mean":
-                                best["tr"]["mean"],
-                            "train_pf":
-                                best["tr"]["pf"],
-                            "train_score":
-                                best["score"],
-                        }
-                    )
-
-                # --------------------------------------------
-                # COVERAGE BY SIGNAL
-                # --------------------------------------------
-
-                for ci, c in enumerate(
-                    cands
-                ):
-
-                    sig_train = int(
-                        np.count_nonzero(
-                            c.signal[
-                                tr0:tr1
-                            ]
-                        )
-                    )
-
-                    sig_test = int(
-                        np.count_nonzero(
-                            c.signal[
-                                te0:te1
-                            ]
-                        )
-                    )
-
-                    coverage_rows.append(
-                        {
-                            "symbol": sym,
-                            "interval": iv,
-                            "fold": fi,
-                            "candidate": ci,
-                            "signal": c.name,
-                            "regime": c.regime,
-                            "train_signal_count":
-                                sig_train,
-                            "test_signal_count":
-                                sig_test,
-                            "test_has_signal":
-                                sig_test > 0,
-                        }
-                    )
-
-            # ------------------------------------------------
-            # ROBUSTNESS ON FIXED CONFIGURATIONS
-            # ------------------------------------------------
-
-            wf_sym = pd.DataFrame(
-                [
-                    x
-                    for x in rows
-                    if x["symbol"] == sym
-                    and x["interval"] == iv
-                ]
+            fs = folds(
+                start,
+                end,
             )
 
-            rob = robustness(
-                wf_sym
+            print(
+                f"[{sym}] folds="
+                f"{len(fs)}",
+                flush=True,
             )
 
-            good = (
-                rob[
-                    rob.robust
-                ].copy()
-                if not rob.empty
-                else pd.DataFrame()
-            )
+            if len(fs) == 0:
 
-            # ------------------------------------------------
-            # HOLDOUT
-            # ------------------------------------------------
-
-            if not good.empty:
-
-                good = good.sort_values(
-                    [
-                        "robustness_score",
-                        "median_edge_random",
-                        "median_pf",
-                    ],
-                    ascending=False,
-                )
-
-                q = good.iloc[0]
-
-                ci = next(
-                    (
-                        i
-                        for i, c in enumerate(
-                            cands
-                        )
-                        if (
-                            c.name == q.signal
-                            and c.regime == q.regime
-                        )
-                    ),
-                    None,
-                )
-
-                if ci is not None:
-
-                    tr = inside(
-                        simulate(
-                            L,
-                            cands[ci].signal,
-                            float(q.tp),
-                            float(q.sl),
-                            int(q.hold),
-                            q.profile,
-                            SLIP.get(
-                                sym,
-                                0.0003,
-                            ),
-                        ),
-                        hs,
-                        len(entry),
-                    )
-
-                    z = stats(tr)
-
-                    m = mc(
-                        tr,
-                        a.capital,
-                        a.mc_runs,
-                        SEED + 999,
-                    )
-
-                    holds.append(
-                        {
-                            "symbol": sym,
-                            "interval": iv,
-                            "signal": q.signal,
-                            "regime": q.regime,
-                            "profile": q.profile,
-                            "tp": q.tp,
-                            "sl": q.sl,
-                            "hold": q.hold,
-
-                            "robust_active_folds":
-                                q.active_folds,
-
-                            "robust_total_folds":
-                                q.total_folds,
-
-                            "robust_total_trades":
-                                q.total_trades,
-
-                            "robust_positive_ratio":
-                                q.positive_fold_ratio,
-
-                            "robust_beat_random_ratio":
-                                q.beat_random_ratio,
-
-                            "robust_median_pf":
-                                q.median_pf,
-
-                            "robust_median_edge_random":
-                                q.median_edge_random,
-
-                            "robustness_score":
-                                q.robustness_score,
-
-                            "holdout_n":
-                                z["n"],
-
-                            "holdout_mean":
-                                z["mean"],
-
-                            "holdout_t":
-                                z["t"],
-
-                            "holdout_pf":
-                                z["pf"],
-
-                            "holdout_dd":
-                                z["dd"],
-
-                            "holdout_return":
-                                z["ret"],
-
-                            "mc_enabled":
-                                m["enabled"],
-
-                            "mc_median":
-                                m["median"],
-
-                            "mc_p05":
-                                m["p05"],
-
-                            "mc_p95":
-                                m["p95"],
-
-                            "mc_dd":
-                                m["dd"],
-                        }
-                    )
-
-                    print(
-                        f"  HOLDOUT | "
-                        f"{q.signal} | "
-                        f"{pct(z['mean'])} | "
-                        f"PF={num(z['pf'])} | "
-                        f"n={z['n']}"
-                    )
-
-            else:
                 print(
-                    "  HOLDOUT | "
-                    "NOT RUN — "
-                    "no robust configuration"
+                    f"[{sym}] "
+                    f"NO WALK-FORWARD FOLDS",
+                    flush=True,
                 )
 
+                continue
+
+            # ------------------------------------------------
+            # V4.3 exhaustive WF
+            # ------------------------------------------------
+
+            wf_rows, selected_rows = (
+                evaluate_walk_forward_v43(
+                    L=L,
+                    cands=cands,
+                    sym=sym,
+                    iv=iv,
+                    fs=fs,
+                    random_runs=args.random_runs,
+                )
+            )
+
+            all_wf_rows.extend(
+                wf_rows
+            )
+
+            all_selected_rows.extend(
+                selected_rows
+            )
+
+            # ------------------------------------------------
+            # Asset robustness
+            # ------------------------------------------------
+
+            wf_asset = pd.DataFrame(
+                wf_rows
+            )
+
+            rob_asset = robustness(
+                wf_asset
+            )
+
+            if not rob_asset.empty:
+                all_rob_rows.extend(
+                    rob_asset.to_dict(
+                        "records"
+                    )
+                )
+
+            robust_count = (
+                int(
+                    rob_asset["robust"].sum()
+                )
+                if not rob_asset.empty
+                else 0
+            )
+
             print(
-                f"  done {sym} {iv} | "
-                f"{(time.time()-tic)/60:.1f} min"
+                f"[{sym}] ROBUST "
+                f"CONFIGS={robust_count}",
+                flush=True,
+            )
+
+            # ------------------------------------------------
+            # Holdout
+            # ------------------------------------------------
+
+            holdout_start = (
+                end
+                - pd.Timedelta(
+                    days=HOLD
+                )
+            )
+
+            hold_rows = run_holdout(
+                L,
+                cands,
+                sym,
+                iv,
+                holdout_start,
+                end,
+                rob_asset,
+            )
+
+            all_holdout_rows.extend(
+                hold_rows
             )
 
     # ========================================================
-    # SAVE
+    # FINAL OUTPUTS
     # ========================================================
 
-    wf = pd.DataFrame(rows)
-    rob = robustness(wf)
-    glob = global_robust(rob)
-    hold = pd.DataFrame(holds)
-
-    selection = pd.DataFrame(
-        selection_rows
+    wf = pd.DataFrame(
+        all_wf_rows
     )
 
-    coverage = pd.DataFrame(
-        coverage_rows
+    selected = pd.DataFrame(
+        all_selected_rows
+    )
+
+    rob = pd.DataFrame(
+        all_rob_rows
+    )
+
+    holdout = pd.DataFrame(
+        all_holdout_rows
     )
 
     wf.to_csv(
-        out / "walk_forward_v43.csv",
+        "results/walk_forward_v43.csv",
+        index=False,
+    )
+
+    selected.to_csv(
+        "results/selected_v43.csv",
         index=False,
     )
 
     rob.to_csv(
-        out / "robustness_v43.csv",
+        "results/robustness_v43.csv",
         index=False,
     )
 
-    glob.to_csv(
-        out / "global_v43.csv",
+    holdout.to_csv(
+        "results/holdout_v43.csv",
         index=False,
     )
 
-    coverage.to_csv(
-        out / "coverage_v43.csv",
+    # --------------------------------------------------------
+    # Global robustness
+    # --------------------------------------------------------
+
+    global_df = global_robust(
+        rob
+    )
+
+    global_df.to_csv(
+        "results/global_v43.csv",
         index=False,
     )
 
-    selection.to_csv(
-        out / "selection_v43.csv",
-        index=False,
-    )
+    # --------------------------------------------------------
+    # Summary
+    # --------------------------------------------------------
 
-    hold.to_csv(
-        out / "holdout_v43.csv",
-        index=False,
-    )
-
-    # ========================================================
-    # REPORT
-    # ========================================================
-
-    report = [
-        "# SCALP LAB V4.3",
-        "",
-        f"- History : {a.days} jours",
-        f"- TRAIN/TEST/STEP : {TRAIN}/{TEST}/{STEP} jours",
-        f"- HOLDOUT : {HOLD} jours",
-        f"- MC : {a.mc_runs}",
-        "",
-        "## Méthode",
-        "",
-        "- Toutes les configurations sont évaluées sur chaque fold.",
-        "- La robustesse est calculée sur une configuration fixe à travers les folds.",
-        "- Un fold sans trade reste présent avec test_n=0.",
-        "- La sélection du meilleur candidat TRAIN est conservée séparément.",
-        "- Le holdout final n'intervient jamais dans la robustesse.",
-        "",
-        "## Résultat",
-        "",
-    ]
-
-    if rob.empty:
-        report.append(
-            "Aucune configuration analysable."
+    robust_count = (
+        int(
+            rob["robust"].sum()
         )
+        if not rob.empty
+        else 0
+    )
+
+    summary = []
+
+    summary.append(
+        "# SCALP LAB V4.3 SUMMARY"
+    )
+
+    summary.append("")
+
+    summary.append(
+        f"- Symbols: "
+        f"{', '.join(args.symbols)}"
+    )
+
+    summary.append(
+        f"- Intervals: "
+        f"{', '.join(args.intervals)}"
+    )
+
+    summary.append(
+        f"- History: "
+        f"{args.days} days"
+    )
+
+    summary.append(
+        f"- MC runs: "
+        f"{args.mc_runs}"
+    )
+
+    summary.append(
+        f"- Random runs: "
+        f"{args.random_runs}"
+    )
+
+    summary.append(
+        f"- WF train/test/step: "
+        f"{TRAIN}/{TEST}/{STEP} days"
+    )
+
+    summary.append(
+        f"- Holdout: {HOLD} days"
+    )
+
+    summary.append("")
+
+    summary.append(
+        "## V4.3 methodology"
+    )
+
+    summary.append("")
+
+    summary.append(
+        "Every fixed configuration is evaluated "
+        "on every walk-forward fold."
+    )
+
+    summary.append(
+        "Robustness is calculated from the "
+        "complete OOS matrix."
+    )
+
+    summary.append(
+        "Training winners are stored separately "
+        "in selected_v43.csv."
+    )
+
+    summary.append("")
+
+    summary.append(
+        f"- WF rows: {len(wf):,}"
+    )
+
+    summary.append(
+        f"- Selected rows: {len(selected):,}"
+    )
+
+    summary.append(
+        f"- Robust configurations: "
+        f"{robust_count}"
+    )
+
+    summary.append("")
+
+    if not rob.empty:
+
+        summary.append(
+            "## Robustness"
+        )
+
+        summary.append("")
+
+        cols = [
+            "symbol",
+            "signal",
+            "regime",
+            "profile",
+            "tp",
+            "sl",
+            "hold",
+            "eligible_folds",
+            "active_folds",
+            "total_trades",
+            "mean_oos",
+            "median_oos",
+            "positive_fold_ratio",
+            "median_pf",
+            "median_dd",
+            "mean_edge",
+            "robust",
+        ]
+
+        cols = [
+            c for c in cols
+            if c in rob.columns
+        ]
+
+        summary.append(
+            rob[cols]
+            .head(20)
+            .to_markdown(
+                index=False
+            )
+        )
+
     else:
-        report.append(
-            f"- Configurations analysées : {len(rob)}"
+
+        summary.append(
+            "No robustness rows."
         )
 
-        report.append(
-            f"- Configurations robustes : "
-            f"{int(rob.robust.sum())}"
-        )
-
-        report.append(
-            f"- Holdouts exécutés : {len(hold)}"
-        )
-
-        if not coverage.empty:
-            report.append(
-                f"- Lignes de couverture : "
-                f"{len(coverage)}"
-            )
-
-        if not selection.empty:
-            report.append(
-                f"- Sélections TRAIN : "
-                f"{len(selection)}"
-            )
-
-    report += [
-        "",
-        "## Interprétation",
-        "",
-        "V4.3 permet de distinguer :",
-        "",
-        "1. configuration non sélectionnée par TRAIN ;",
-        "2. signal absent sur le TEST ;",
-        "3. signal présent mais aucun trade simulable ;",
-        "4. trades présents mais performance négative ;",
-        "5. configuration robuste sur plusieurs folds.",
-        "",
-        "## Limites",
-        "",
-        "- OHLCV uniquement.",
-        "- Pas de funding, carnet d'ordres ou latence réelle.",
-        "- Priorité SL si TP et SL sont touchés dans la même bougie.",
-        "- Exécution maker approximée.",
-        "- Le holdout final n'intervient jamais dans le filtre de robustesse.",
-    ]
-
-    (
-        out / "summary_v43.md"
+    Path(
+        "results/summary_v43.md"
     ).write_text(
-        "\n".join(report) + "\n",
+        "\n".join(summary),
         encoding="utf-8",
     )
 
-    print("")
+    # ========================================================
+    # FINAL CONSOLE
+    # ========================================================
 
     print(
-        f"V4.3 TERMINÉ | "
-        f"lignes WF={len(wf)} | "
-        f"configs robustes="
-        f"{int(rob.robust.sum()) if not rob.empty else 0} | "
-        f"holdouts={len(hold)} | "
-        f"{(time.time()-t0)/60:.1f} min"
+        "",
+        flush=True,
+    )
+
+    print(
+        "==============================================",
+        flush=True,
+    )
+
+    print(
+        "V4.3 COMPLETE",
+        flush=True,
+    )
+
+    print(
+        "==============================================",
+        flush=True,
+    )
+
+    print(
+        f"WF rows       : {len(wf):,}",
+        flush=True,
+    )
+
+    print(
+        f"Selected rows : {len(selected):,}",
+        flush=True,
+    )
+
+    print(
+        f"Robust configs: {robust_count}",
+        flush=True,
+    )
+
+    print(
+        "==============================================",
+        flush=True,
     )
 
 
