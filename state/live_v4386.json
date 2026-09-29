@@ -1,9 +1,22 @@
 {
   "symbol": "SOLUSDT",
-  "candles": [],
+  "candles": [
+    {
+      "time": "2026-09-29T14:00:00+00:00",
+      "open": 120.54,
+      "high": 120.74,
+      "low": 120.27,
+      "close": 120.66,
+      "volume": 132343.24000001026,
+      "trades": 20801,
+      "closed": false
+    }
+  ],
   "last_closed": null,
   "warmup": true,
-  "updated": "2026-09-29T14:22:19.326766+00:00",
-  "live_trades": 28710,
-  "bad_messages": 122
+  "updated": "2026-09-29T14:39:17.760202+00:00",
+  "live_trades": 20801,
+  "bad_messages": 71,
+  "closed_count": 0,
+  "gaps": []
 }
