@@ -10,40 +10,25 @@
 
 ## Walk-forward OOS
 
-### 5m
+### 1h
 
 | mesure | valeur |
 |---|---:|
 | folds | 9 |
-| test mean/trade | -0.0482% |
-| folds positifs | 3/9 |
-| PF médian | 0.64 |
-| DD médian | -1.5545% |
-| médiane trade | -0.0579% |
-| mean/trade hasard (côté aléatoire) | -0.1057% |
-
-### 15m
-
-| mesure | valeur |
-|---|---:|
-| folds | 9 |
-| test mean/trade | -0.0778% |
+| test mean/trade | -0.1804% |
 | folds positifs | 2/9 |
-| PF médian | 0.84 |
-| DD médian | -2.7557% |
-| médiane trade | -0.2372% |
-| mean/trade hasard (côté aléatoire) | -0.1990% |
+| PF médian | 0.77 |
+| DD médian | -5.3011% |
+| médiane trade | -0.8285% |
+| mean/trade hasard (côté aléatoire) | -0.1950% |
 
 ## FINAL HOLDOUT
 
 | symbole | intervalle | mean/trade | t | PF | DD | n | return |
 |---|---|---:|---:|---:|---:|---:|---:|
-| BTCUSDT | 5m | -0.0675% | -0.8 | 0.59 | -0.8207% | 13 | -0.8787% |
-| ETHUSDT | 5m | -0.0235% | -0.4 | 0.85 | -2.0686% | 31 | -0.7447% |
-| SOLUSDT | 5m | -0.1080% | -0.7 | 0.63 | -2.1710% | 11 | -1.1953% |
-| BTCUSDT | 15m | +0.0085% | 0.1 | 1.04 | -4.1126% | 37 | +0.2796% |
-| ETHUSDT | 15m | -0.3018% | -2.5 | 0.34 | -8.7062% | 29 | -8.4481% |
-| SOLUSDT | 15m | -0.2481% | -1.0 | 0.49 | -2.4152% | 11 | -2.7297% |
+| BTCUSDT | 1h | +0.0739% | 0.3 | 1.30 | -0.8690% | 6 | +0.4314% |
+| ETHUSDT | 1h | -0.3759% | -1.0 | 0.62 | -18.4275% | 24 | -8.9659% |
+| SOLUSDT | 1h | +0.3198% | 0.9 | 1.38 | -5.6318% | 36 | +11.2518% |
 
 ## Benchmarks
 
@@ -51,34 +36,33 @@
 
 | intervalle | stratégie mean | benchmark mécanique (toujours LONG) |
 |---|---:|---:|
-| 5m | -0.0482% | -0.1805% |
-| 15m | -0.0778% | -0.2078% |
+| 1h | -0.1804% | -0.2910% |
 
 ## Robustesse des coûts
 
 | scénario | mean/trade | PF médian | DD médian |
 |---|---:|---:|---:|
-| base | -0.0630% | 0.77 | -2.2566% |
-| fees+100% | -0.1241% | 0.63 | -2.7998% |
-| fees+25% | -0.0783% | 0.73 | -2.3488% |
-| fees+50% | -0.0936% | 0.69 | -2.4940% |
-| fees+50%_slip+100% | -0.1064% | 0.67 | -2.6413% |
-| slip+100% | -0.0758% | 0.74 | -2.3539% |
-| slip+50% | -0.0703% | 0.75 | -2.2972% |
+| base | -0.1804% | 0.77 | -5.3011% |
+| fees+100% | -0.2439% | 0.72 | -6.4033% |
+| fees+25% | -0.1963% | 0.76 | -5.5778% |
+| fees+50% | -0.2121% | 0.75 | -5.8538% |
+| fees+50%_slip+100% | -0.2250% | 0.73 | -5.9953% |
+| slip+100% | -0.1933% | 0.75 | -5.4435% |
+| slip+50% | -0.1868% | 0.76 | -5.3723% |
 
 ## Distribution des stratégies sélectionnées
 
 ### signal
 
-{'pullback rsi=35': 10, 'pullback rsi=40': 4, 'donchian n=50 vol=1.5': 4}
+{'donchian n=20 vol=1.5': 5, 'donchian n=50 vol=1.5': 2, 'donchian n=20 vol=0.0': 1, 'vwap n=96 k=2.0': 1}
 
 ### regime
 
-{'range': 7, 'trend': 6, 'all': 5}
+{'all': 5, 'trend': 4}
 
 ### profile
 
-{'maker_both': 16, 'maker_tp': 2}
+{'maker_both': 8, 'maker_tp': 1}
 
 ## Limites
 
