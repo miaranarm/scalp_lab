@@ -4,13 +4,13 @@ from pathlib import Path
 from datetime import datetime,timezone,timedelta
 import pandas as pd
 
-S="SOLUSDT";URL=f"wss://fstream.binance.com/ws/{S.lower()}@trade"
-STATE=Path("state/live_v4386.json");OUT=Path("results/live_candles_v4386.csv")
-RUN=600;UA={"User-Agent":"Mozilla/5.0"}
-STATE.parent.mkdir(exist_ok=True);OUT.parent.mkdir(exist_ok=True)
-N=BAD=0;C=None;LIVE=[];STOP=False
+S="SOLUSDT"; URL=f"wss://fstream.binance.com/ws/{S.lower()}@trade"
+STATE=Path("state/live_v4386.json"); OUT=Path("results/live_candles_v4386.csv")
+RUN=600; UA={"User-Agent":"Mozilla/5.0"}
+STATE.parent.mkdir(exist_ok=True); OUT.parent.mkdir(exist_ok=True)
+N=BAD=0; C=None; LIVE=[]; STOP=False
 
-def log(x):print(x,flush=True)
+def log(x): print(x,flush=True)
 
 def load():
     try:return json.loads(STATE.read_text())
@@ -20,8 +20,7 @@ def parse(b):
     z=pd.read_csv(io.BytesIO(b),compression="zip",header=None)
     if len(z.columns)<9:return []
     z=z.iloc[:,:9]
-    if str(z.iloc[0,0]).lower() in ("open_time","timestamp"):
-        z=z.iloc[1:]
+    if str(z.iloc[0,0]).lower() in ("open_time","timestamp"):z=z.iloc[1:]
     z.columns=["time","open","high","low","close","volume","x","y","trades"]
     z["time"]=pd.to_numeric(z.time,errors="coerce")
     for c in ["open","high","low","close","volume","trades"]:
@@ -34,7 +33,7 @@ def parse(b):
     } for x in z.itertuples()]
 
 def vision():
-    now=datetime.now(timezone.utc);out={}
+    now=datetime.now(timezone.utc); out={}
     urls=[]
     for d in [now-timedelta(days=i) for i in range(4)]:
         fn=f"{S}-1h-{d:%Y-%m-%d}.zip"
@@ -45,7 +44,7 @@ def vision():
         try:
             r=requests.get(u,headers=UA,timeout=20)
             if r.status_code!=200:
-                log(f"VISION HTTP | {r.status_code}");continue
+                log(f"VISION HTTP | {r.status_code}"); continue
             for x in parse(r.content):out[x["time"]]=x
         except Exception as e:log(f"VISION ERROR | {type(e).__name__}")
     return list(out.values())
@@ -53,68 +52,91 @@ def vision():
 def msg(ws,m):
     global N,BAD,C
     try:
-        x=json.loads(m);p=float(x["p"]);q=float(x["q"]);t=int(x["T"])
-        if p<=0 or q<0:BAD+=1;return
+        x=json.loads(m); p=float(x["p"]); q=float(x["q"]); t=int(x["T"])
+        if p<=0 or q<0: BAD+=1; return
         N+=1
         h=datetime.fromtimestamp(t/1000,tz=timezone.utc).replace(
             minute=0,second=0,microsecond=0)
         k=h.isoformat()
         if C is None or C["time"]!=k:
-            if C:LIVE.append(C.copy())
+            if C:
+                C["closed"]=True
+                LIVE.append(C.copy())
             C={"time":k,"open":p,"high":p,"low":p,
                "close":p,"volume":q,"trades":1,"closed":False}
         else:
-            C["high"]=max(C["high"],p);C["low"]=min(C["low"],p)
-            C["close"]=p;C["volume"]+=q;C["trades"]+=1
-    except:BAD+=1
+            C["high"]=max(C["high"],p); C["low"]=min(C["low"],p)
+            C["close"]=p; C["volume"]+=q; C["trades"]+=1
+    except: BAD+=1
 
-def opened(ws):log("WS CONNECT | OK")
-def error(ws,e):log(f"WS ERROR | {type(e).__name__} | {e}")
-def closed(ws,a,b):log("WS CLOSED")
+def opened(ws): log("WS CONNECT | OK")
+def error(ws,e): log(f"WS ERROR | {type(e).__name__} | {e}")
+def closed(ws,a,b): log("WS CLOSED")
 
 def wsrun():
     global STOP
-    w=websocket.WebSocketApp(URL,on_open=opened,on_message=msg,
-                             on_error=error,on_close=closed)
-    try:w.run_forever(sslopt={"cert_reqs":ssl.CERT_REQUIRED},
-                      ping_interval=20,ping_timeout=10)
-    except Exception as e:log(f"WS FATAL | {type(e).__name__}")
+    w=websocket.WebSocketApp(
+        URL,on_open=opened,on_message=msg,on_error=error,on_close=closed)
+    try:
+        w.run_forever(
+            sslopt={"cert_reqs":ssl.CERT_REQUIRED},
+            ping_interval=20,ping_timeout=10)
+    except Exception as e: log(f"WS FATAL | {type(e).__name__}")
     STOP=True
 
 def main():
     global C
-    log("V438.6e | CONTINUITY | 10 MIN")
-    s=load();old={x["time"]:x for x in s.get("candles",[])}
 
-    v=vision();log(f"VISION | {len(v)}")
-    now=datetime.now(timezone.utc).replace(minute=0,second=0,microsecond=0)
+    log("V438.6f | CONTINUITY | 10 MIN")
+    s=load()
+    old={x["time"]:x for x in s.get("candles",[])}
+    now=datetime.now(timezone.utc).replace(
+        minute=0,second=0,microsecond=0)
+
+    v=vision(); log(f"VISION | {len(v)}")
     for x in v:
-        if datetime.fromisoformat(x["time"])<now:old[x["time"]]=x
+        if datetime.fromisoformat(x["time"])<now:
+            old[x["time"]]=x
 
     C=s.get("live")
-    if C:log(f"RESUME LIVE | {C['time']}")
 
-    th=threading.Thread(target=wsrun,daemon=True);th.start()
+    # Promote explicitement l'ancien live s'il appartient à une heure passée.
+    if C:
+        ct=datetime.fromisoformat(C["time"])
+        if ct<now:
+            C["closed"]=True
+            old[C["time"]]=C.copy()
+            log(f"CLOSE PREVIOUS LIVE | {C['time']}")
+            C=None
+        else:
+            log(f"RESUME LIVE | {C['time']}")
+
+    th=threading.Thread(target=wsrun,daemon=True); th.start()
     t=time.time()
-    while time.time()-t<RUN and not STOP:time.sleep(5)
 
-    now=datetime.now(timezone.utc).replace(minute=0,second=0,microsecond=0)
+    while time.time()-t<RUN and not STOP:
+        time.sleep(5)
+
+    now=datetime.now(timezone.utc).replace(
+        minute=0,second=0,microsecond=0)
 
     if C:
         C["closed"]=datetime.fromisoformat(C["time"])<now
-        LIVE.append(C.copy())
-        log(f"LIVE CANDLE | {C['time']} | O={C['open']:.4f} "
-            f"H={C['high']:.4f} L={C['low']:.4f} C={C['close']:.4f} N={C['trades']}")
+        if C["closed"]:
+            old[C["time"]]=C.copy()
+            log(f"LIVE CLOSED | {C['time']}")
+            C=None
 
     for x in LIVE:
-        if x["closed"]:old[x["time"]]=x
+        if x["closed"]: old[x["time"]]=x
 
     rows=sorted(old.values(),key=lambda x:x["time"])
     closed=[x for x in rows if x.get("closed",True)]
 
     ts=[datetime.fromisoformat(x["time"]) for x in closed]
-    gaps=[(a.isoformat(),b.isoformat()) for a,b in zip(ts,ts[1:])
-          if b-a!=timedelta(hours=1)]
+    gaps=[(a.isoformat(),b.isoformat())
+           for a,b in zip(ts,ts[1:])
+           if b-a!=timedelta(hours=1)]
 
     last=closed[-1]["time"] if closed else None
     live=C if C and not C["closed"] else None
@@ -128,10 +150,10 @@ def main():
     continuous=not gaps and gap_live==0 and len(closed)>=20
 
     s.update({
-        "candles":rows,"live":live,"last_closed":last,
-        "closed_count":len(closed),"gaps":gaps[-20:],
-        "gap_to_live_hours":gap_live,"warmup":not continuous,
-        "continuous20":continuous,
+        "symbol":S,"candles":rows,"live":live,
+        "last_closed":last,"closed_count":len(closed),
+        "gaps":gaps[-20:],"gap_to_live_hours":gap_live,
+        "warmup":not continuous,"continuous20":continuous,
         "updated":datetime.now(timezone.utc).isoformat(),
         "live_trades":N,"bad_messages":BAD
     })
@@ -150,4 +172,77 @@ def main():
     log(f"CONTINUOUS20 | {'YES' if continuous else 'NO'}")
     log("RESULT | CONTINUITY TEST OK")
 
-if __name__=="__main__":main()
+if __name__=="__main__": main()
+```
+
+### 2. `.github/workflows/V4386f.yml`
+
+```yaml
+name: SCALP LAB V4.3.8.6f CONTINUITY
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -q websocket-client requests pandas
+
+      - run: python -u live_continuity_v4386.py
+
+      - name: Save state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state results
+          git diff --cached --quiet || git commit -m "V438.6f continuity"
+          git push
+```
+
+### Ce que tu dois observer au prochain run
+
+Le résultat devrait maintenant ressembler à :
+
+```text
+CLOSE PREVIOUS LIVE | 2026-09-29T14:00:00+00:00
+WS CONNECT | OK
+...
+CANDLES CLOSED | 73
+GAPS INTERNAL | 0
+GAP TO LIVE | 15h
+WARMUP | YES
+CONTINUOUS20 | NO
+```
+
+Puis, au fil des heures :
+
+```text
+16h → GAP TO LIVE 15h
+17h → GAP TO LIVE 15h
+...
+```
+
+Attention : le **gap ne diminuera pas simplement parce qu'on relance toutes les 10 minutes pendant la même heure**. Il commencera à se résorber lorsque les nouvelles heures seront réellement clôturées.
+
+L'objectif final est :
+
+```text
+GAPS INTERNAL | 0
+GAP TO LIVE | 0h
+WARMUP | NO
+CONTINUOUS20 | YES
+```
+
+**À ce moment seulement**, on pourra reconnecter le paper trader V4.3.8.
