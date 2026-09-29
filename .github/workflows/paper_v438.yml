@@ -21,4 +21,3 @@ jobs:
 
       - name: Futures trade test
         run: timeout 45s python -u feed_test.py
-```
