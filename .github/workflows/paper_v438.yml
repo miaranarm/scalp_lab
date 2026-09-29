@@ -1,4 +1,4 @@
-name: SCALP LAB V4.3.8.4b TRADE TEST
+name: SCALP LAB V4.3.8.5 CANDLE TEST
 
 on:
   workflow_dispatch:
@@ -19,5 +19,5 @@ jobs:
 
       - run: pip install -q websocket-client
 
-      - name: Trade stream test
-        run: timeout 20s python -u feed_test.py
+      - name: Candle builder test
+        run: timeout 40s python -u feed_test.py
