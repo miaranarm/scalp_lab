@@ -1,4 +1,4 @@
-name: SCALP LAB V4.3.8.4 WS TEST
+name: SCALP LAB V4.3.8.4b TRADE TEST
 
 on:
   workflow_dispatch:
@@ -19,4 +19,6 @@ jobs:
 
       - run: pip install -q websocket-client
 
-      - run: python -u feed_test.py
+      - name: Futures trade test
+        run: timeout 45s python -u feed_test.py
+```
