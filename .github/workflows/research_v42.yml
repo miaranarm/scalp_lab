@@ -2,116 +2,183 @@ name: SCALP LAB V4.2 Research
 
 on:
   workflow_dispatch:
-    inputs:
-      symbols:
-        description: "Symboles Binance"
-        required: true
-        default: "BTCUSDT,ETHUSDT,SOLUSDT"
-
-      interval:
-        description: "Intervalle"
-        required: true
-        default: "1h"
-
-      days:
-        description: "Historique en jours"
-        required: true
-        default: "730"
-
-      capital:
-        description: "Capital de recherche"
-        required: true
-        default: "100"
-
-      mc_runs:
-        description: "Nombre de simulations Monte Carlo"
-        required: true
-        default: "5000"
 
 permissions:
   contents: write
 
 jobs:
   research:
-    name: SCALP LAB V4.2
+    name: SCALP LAB V4.2 - Robustness Research
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
     steps:
 
-      # ======================================================
-      # CHECKOUT
-      # ======================================================
-
+      # ============================================================
+      # 1. CHECKOUT
+      # ============================================================
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      # ======================================================
-      # PYTHON
-      # ======================================================
-
+      # ============================================================
+      # 2. PYTHON
+      # ============================================================
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
+          cache: "pip"
 
-      # ======================================================
-      # DEPENDENCIES
-      # ======================================================
-
+      # ============================================================
+      # 3. INSTALL DEPENDENCIES
+      # ============================================================
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install requests==2.32.5
+          pip install pandas==2.2.3
+          pip install numpy==2.1.3
 
-      # ======================================================
-      # ENVIRONMENT INFO
-      # ======================================================
-
-      - name: Show environment
+      # ============================================================
+      # 4. CHECK FILES
+      # ============================================================
+      - name: Check research files
         run: |
-          python --version
-          pip --version
-          echo "Repository: $GITHUB_REPOSITORY"
-          echo "Branch: $GITHUB_REF_NAME"
-          echo "Commit: $GITHUB_SHA"
+          echo "=============================================="
+          echo "SCALP LAB V4.2 - FILE CHECK"
+          echo "=============================================="
+          echo ""
+          echo "Current directory:"
+          pwd
+          echo ""
+          echo "Files:"
+          ls -lah
+          echo ""
+          echo "Research files:"
+          ls -lah research_v41.py research_v42.py 2>/dev/null || true
+          echo ""
+          echo "Workflow:"
+          ls -lah .github/workflows/ 2>/dev/null || true
 
-      # ======================================================
-      # RUN V4.2
-      # ======================================================
+      # ============================================================
+      # 5. VERIFY DATA SOURCE
+      # ============================================================
+      # Sécurité importante :
+      # V4.2 doit utiliser Binance Vision Futures USD-M.
+      # On vérifie que le code V4.2 ne réintroduit pas
+      # api.binance.com/api/v3/klines.
+      # ============================================================
+      - name: Verify Binance data source
+        run: |
+          echo "=============================================="
+          echo "BINANCE DATA SOURCE CHECK"
+          echo "=============================================="
 
+          if grep -n "api.binance.com/api/v3/klines" research_v42.py; then
+            echo ""
+            echo "ERROR: V4.2 utilise encore l'API REST Spot Binance."
+            echo "Cette URL provoque HTTP 451 depuis GitHub Actions."
+            exit 1
+          fi
+
+          if grep -n "data.binance.vision/data/futures/um" research_v41.py; then
+            echo ""
+            echo "OK: Binance Vision USD-M détecté dans V4.1."
+          else
+            echo ""
+            echo "WARNING: source Binance Vision non détectée dans V4.1."
+          fi
+
+          echo ""
+          echo "Data source verification completed."
+
+      # ============================================================
+      # 6. PREPARE RESULTS DIRECTORY
+      # ============================================================
+      - name: Prepare results directory
+        run: |
+          mkdir -p results
+
+          rm -f results/summary_v42.md
+          rm -f results/walk_forward_v42.csv
+          rm -f results/stress_test_v42.csv
+          rm -f results/robustness_v42.csv
+
+      # ============================================================
+      # 7. RUN V4.2 RESEARCH
+      # ============================================================
       - name: Run SCALP LAB V4.2
         run: |
+          echo "============================================================"
+          echo "SCALP LAB V4.2"
+          echo "Robustness-first walk-forward research"
+          echo "============================================================"
+          echo ""
+          echo "DATA       : Binance USD-M Vision Archive"
+          echo "SYMBOLS    : BTCUSDT, ETHUSDT, SOLUSDT"
+          echo "INTERVAL   : 1h"
+          echo "HISTORY    : 730 days"
+          echo "CAPITAL    : 100 USDT"
+          echo "MC RUNS    : 5000"
+          echo ""
+          echo "WF TRAIN   : 180 days"
+          echo "WF TEST    : 45 days"
+          echo "STEP       : 45 days"
+          echo "HOLDOUT    : 90 days"
+          echo ""
+          echo "ROBUSTNESS:"
+          echo "  Minimum valid OOS folds       : 5"
+          echo "  Minimum OOS trades            : 50"
+          echo "  Minimum positive-fold ratio   : 50%"
+          echo "  Minimum beat-random ratio     : 50%"
+          echo "  Minimum median PF              : 1.00"
+          echo "  Minimum median edge/random    : 0%"
+          echo ""
+          echo "============================================================"
+
           python -u research_v42.py \
-            --symbols "${{ github.event.inputs.symbols }}" \
-            --intervals "${{ github.event.inputs.interval }}" \
-            --days "${{ github.event.inputs.days }}" \
-            --capital "${{ github.event.inputs.capital }}" \
-            --mc-runs "${{ github.event.inputs.mc_runs }}"
+            --symbols "BTCUSDT,ETHUSDT,SOLUSDT" \
+            --intervals "1h" \
+            --days "730" \
+            --capital "100" \
+            --mc-runs "5000"
 
-      # ======================================================
-      # DISPLAY RESULTS
-      # ======================================================
-
-      - name: Display research summary
+      # ============================================================
+      # 8. DISPLAY RESULTS
+      # ============================================================
+      - name: Display V4.2 summary
         if: always()
         run: |
-          echo "=============================================="
-          echo "SCALP LAB V4.2 SUMMARY"
-          echo "=============================================="
+          echo ""
+          echo "============================================================"
+          echo "V4.2 SUMMARY"
+          echo "============================================================"
 
           if [ -f results/summary_v42.md ]; then
             cat results/summary_v42.md
           else
-            echo "summary_v42.md introuvable"
+            echo "summary_v42.md not found."
           fi
 
-      # ======================================================
-      # UPLOAD RESULTS AS ARTIFACT
-      # ======================================================
+      # ============================================================
+      # 9. DISPLAY GENERATED FILES
+      # ============================================================
+      - name: List generated results
+        if: always()
+        run: |
+          echo ""
+          echo "============================================================"
+          echo "GENERATED RESULTS"
+          echo "============================================================"
 
-      - name: Upload V4.2 research results
+          find results -maxdepth 1 -type f -printf '%f\n' | sort
+
+      # ============================================================
+      # 10. UPLOAD ARTIFACTS
+      # ============================================================
+      - name: Upload V4.2 research artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -119,26 +186,74 @@ jobs:
           path: |
             results/summary_v42.md
             results/walk_forward_v42.csv
+            results/stress_test_v42.csv
             results/robustness_v42.csv
-            results/global_v42.csv
-            results/holdout_v42.csv
           if-no-files-found: warn
+          retention-days: 30
 
-      # ======================================================
-      # COMMIT RESULTS
-      # ======================================================
-
+      # ============================================================
+      # 11. COMMIT RESULTS
+      # ============================================================
       - name: Commit research results
         if: success()
         run: |
+          echo "============================================================"
+          echo "COMMITTING V4.2 RESULTS"
+          echo "============================================================"
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add results/
+          git add results/summary_v42.md
+          git add results/walk_forward_v42.csv
+          git add results/stress_test_v42.csv
+          git add results/robustness_v42.csv
 
           if git diff --cached --quiet; then
-            echo "Aucun changement à commit."
+            echo "No result changes to commit."
           else
             git commit -m "research: SCALP LAB V4.2 results"
-            git push
+            git push origin HEAD:main
           fi
+
+      # ============================================================
+      # 12. FINAL STATUS
+      # ============================================================
+      - name: Final status
+        if: always()
+        run: |
+          echo ""
+          echo "============================================================"
+          echo "SCALP LAB V4.2 - RUN FINISHED"
+          echo "============================================================"
+          echo ""
+          echo "Commit: $(git rev-parse --short HEAD)"
+          echo "Branch: $(git branch --show-current)"
+          echo ""
+
+          if [ -f results/summary_v42.md ]; then
+            echo "OK: summary_v42.md"
+          else
+            echo "MISSING: summary_v42.md"
+          fi
+
+          if [ -f results/walk_forward_v42.csv ]; then
+            echo "OK: walk_forward_v42.csv"
+          else
+            echo "MISSING: walk_forward_v42.csv"
+          fi
+
+          if [ -f results/stress_test_v42.csv ]; then
+            echo "OK: stress_test_v42.csv"
+          else
+            echo "MISSING: stress_test_v42.csv"
+          fi
+
+          if [ -f results/robustness_v42.csv ]; then
+            echo "OK: robustness_v42.csv"
+          else
+            echo "MISSING: robustness_v42.csv"
+          fi
+
+          echo ""
+          echo "============================================================"
