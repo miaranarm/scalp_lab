@@ -1,30 +1,42 @@
 """
-SCALP LAB V4.2
-Robustness-first walk-forward research.
+SCALP LAB V4.2 — laboratoire de recherche scalping Binance USD-M.
 
-Objectif :
-- conserver le moteur de recherche V4.1
-- ajouter une sélection statistiquement plus robuste
-- pénaliser les petits échantillons
-- exclure les folds sans trades
-- comparer stratégie vs random
-- séparer strictement OOS et final holdout
-- produire une sélection globale multi-actifs
+V4.2 = V4.1 + couche de robustesse statistique.
 
-IMPORTANT :
-Ce programme est un outil de recherche/backtest.
-Il ne constitue pas une validation de stratégie de trading réelle.
+Conserve :
+- Binance Futures USD-M
+- data.binance.vision
+- OHLCV
+- signal clôturé -> entrée suivante
+- mêmes signaux
+- mêmes régimes
+- mêmes exits
+- mêmes profils
+- même simulation
+- même benchmark random-side
+- même Monte-Carlo
+
+Ajoute :
+- FINAL HOLDOUT 90 jours
+- agrégation OOS par configuration
+- stabilité inter-folds
+- pénalisation des petits échantillons
+- filtre de robustesse
+- analyse multi-actifs
+- configurations n=0 invalides
 """
 
 from __future__ import annotations
 
 import argparse
+import io
 import math
 import os
-import random
-import statistics
-from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta, timezone
+import time
+import zipfile
+from collections import Counter
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -33,1470 +45,1849 @@ import requests
 
 
 # ============================================================
-# CONFIGURATION
+# CONFIG
 # ============================================================
 
-TAKER_FEE = 0.0005
-MAKER_FEE = 0.0002
+BASE_URL = "https://data.binance.vision/data/futures/um"
 
-WF_TRAIN_DAYS = 180
-WF_TEST_DAYS = 45
+INTERVAL_MS = {
+    "5m": 300_000,
+    "15m": 900_000,
+    "1h": 3_600_000,
+    "4h": 14_400_000,
+}
+
+FEE_TAKER = 0.0005
+FEE_MAKER = 0.0002
+THROUGH = 0.00005
+
+SLIP = {
+    "BTCUSDT": 0.00010,
+    "ETHUSDT": 0.00015,
+    "SOLUSDT": 0.00030,
+}
+
+DEFAULT_SLIP = 0.00030
+
+EXITS = (
+    (1.5, 1.0, 12),
+    (2.0, 1.0, 24),
+    (3.0, 1.5, 36),
+    (2.0, 2.0, 24),
+)
+
+PROFILES = (
+    "taker",
+    "maker_tp",
+    "maker_both",
+)
+
+TRAIN_DAYS = 180
+TEST_DAYS = 45
+
+# V4.2 : holdout plus long
 FINAL_HOLDOUT_DAYS = 90
 
-MIN_TRADES_PER_FOLD = 5
+STEP_DAYS = 45
 
+MIN_TRAIN_TRADES = 50
+
+# Robustesse V4.2
 MIN_ACTIVE_FOLDS = 5
 MIN_TOTAL_TRADES = 50
 MIN_POSITIVE_FOLD_RATIO = 0.50
 MIN_BEAT_RANDOM_RATIO = 0.50
-
 MIN_MEDIAN_PF = 1.00
 MIN_MEDIAN_EDGE_RANDOM = 0.0
 
-MC_SEED = 42
+RANDOM_SIDE_RUNS = 100
+MC_RUNS = 5000
+MC_SEED = 20260928
 
-RESULTS_DIR = Path("results")
+DEFAULT_CAPITAL = 100.0
+
+CONTEXT_ENTRY_TO_CTX = {
+    "5m": "1h",
+    "15m": "1h",
+    "1h": "4h",
+}
+
+CONTEXT_WARMUP_DAYS = {
+    "1h": 12,
+    "4h": 40,
+}
+
+CONTEXT_MIN_LEN = {
+    "1h": 500,
+    "4h": 200,
+}
+
+SIGNALS = (
+    ("vwap", {"n": 48, "k": 2.0}),
+    ("vwap", {"n": 96, "k": 2.0}),
+    ("vwap", {"n": 48, "k": 3.0}),
+    ("donchian", {"n": 20, "vol": 0.0}),
+    ("donchian", {"n": 20, "vol": 1.5}),
+    ("donchian", {"n": 50, "vol": 1.5}),
+    ("zscore", {"n": 30, "thr": 2.0}),
+    ("zscore", {"n": 60, "thr": 2.5}),
+    ("pullback", {"rsi": 35}),
+    ("pullback", {"rsi": 40}),
+    ("breakout", {"n": 20}),
+)
+
+REGIMES = (
+    "all",
+    "trend",
+    "range",
+)
 
 
 # ============================================================
 # DATA
 # ============================================================
 
-BINANCE_URL = (
-    "https://api.binance.com/api/v3/klines"
-)
+def read_zip_csv(content: bytes):
+    with zipfile.ZipFile(io.BytesIO(content)) as z:
+        name = z.namelist()[0]
+        raw = z.read(name).decode("utf-8")
 
-
-def fetch_klines(symbol: str, interval: str, days: int) -> pd.DataFrame:
-    """
-    Binance spot OHLCV.
-    V4.2 conserve volontairement le principe OHLCV-only.
-    """
-
-    end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    start_ms = int(
-        (
-            datetime.now(timezone.utc) - timedelta(days=days)
-        ).timestamp()
-        * 1000
-    )
-
-    rows = []
-
-    while start_ms < end_ms:
-        params = {
-            "symbol": symbol,
-            "interval": interval,
-            "startTime": start_ms,
-            "endTime": end_ms,
-            "limit": 1000,
-        }
-
-        r = requests.get(
-            BINANCE_URL,
-            params=params,
-            timeout=30,
+    return [
+        r[:12]
+        for r in (
+            x.split(",")
+            for x in raw.splitlines()
         )
-        r.raise_for_status()
+        if r and r[0].isdigit()
+    ]
 
-        batch = r.json()
 
-        if not batch:
-            break
+def fetch_vision(
+    symbol: str,
+    interval: str,
+    start_ms: int,
+    end_ms: int,
+):
+    rows = []
+    step = INTERVAL_MS[interval]
 
-        rows.extend(batch)
-
-        last_open = batch[-1][0]
-        next_start = last_open + 1
-
-        if next_start <= start_ms:
-            break
-
-        start_ms = next_start
-
-        if len(batch) < 1000:
-            break
-
-    if not rows:
-        raise RuntimeError(f"Aucune donnée reçue pour {symbol}")
-
-    df = pd.DataFrame(
-        rows,
-        columns=[
-            "open_time",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "close_time",
-            "quote_volume",
-            "trades",
-            "taker_base",
-            "taker_quote",
-            "ignore",
-        ],
+    start_dt = datetime.fromtimestamp(
+        start_ms / 1000,
+        timezone.utc,
     )
 
-    df["timestamp"] = pd.to_datetime(
-        df["open_time"],
-        unit="ms",
-        utc=True,
+    end_dt = datetime.fromtimestamp(
+        end_ms / 1000,
+        timezone.utc,
     )
 
-    for col in [
+    cur = start_dt.replace(
+        day=1,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+
+    while cur < end_dt:
+
+        if cur.month == 12:
+            nxt = cur.replace(
+                year=cur.year + 1,
+                month=1,
+            )
+        else:
+            nxt = cur.replace(
+                month=cur.month + 1
+            )
+
+        a = max(
+            cur.timestamp() * 1000,
+            start_ms,
+        )
+
+        b = min(
+            nxt.timestamp() * 1000 - step,
+            end_ms,
+        )
+
+        if a <= b:
+
+            url = (
+                f"{BASE_URL}/monthly/klines/"
+                f"{symbol}/{interval}/"
+                f"{symbol}-{interval}-{cur:%Y-%m}.zip"
+            )
+
+            try:
+                r = requests.get(
+                    url,
+                    timeout=90,
+                )
+
+                if r.ok:
+                    rows.extend(
+                        read_zip_csv(r.content)
+                    )
+
+                else:
+                    day = datetime.fromtimestamp(
+                        a / 1000,
+                        timezone.utc,
+                    ).date()
+
+                    last = datetime.fromtimestamp(
+                        b / 1000,
+                        timezone.utc,
+                    ).date()
+
+                    while day <= last:
+
+                        u = (
+                            f"{BASE_URL}/daily/klines/"
+                            f"{symbol}/{interval}/"
+                            f"{symbol}-{interval}-{day}.zip"
+                        )
+
+                        try:
+                            q = requests.get(
+                                u,
+                                timeout=90,
+                            )
+
+                            if q.ok:
+                                rows.extend(
+                                    read_zip_csv(
+                                        q.content
+                                    )
+                                )
+
+                        except requests.RequestException:
+                            pass
+
+                        day += pd.Timedelta(
+                            days=1
+                        )
+
+            except requests.RequestException:
+                pass
+
+        cur = nxt
+
+    return rows
+
+
+def to_frame(rows):
+
+    cols = [
+        "time",
         "open",
         "high",
         "low",
         "close",
         "volume",
-    ]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+        "x",
+        "q",
+        "n",
+        "tb",
+        "tq",
+        "i",
+    ]
 
-    df = df[
-        [
-            "timestamp",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-        ]
-    ].dropna()
+    d = pd.DataFrame(
+        rows,
+        columns=cols,
+    )
 
-    df = df.drop_duplicates("timestamp")
-    df = df.sort_values("timestamp").reset_index(drop=True)
+    for c in cols[:6]:
+        d[c] = pd.to_numeric(
+            d[c],
+            errors="coerce",
+        )
 
-    return df
+    d = (
+        d.dropna(subset=cols[:6])
+        .drop_duplicates("time")
+        .sort_values("time")
+        .reset_index(drop=True)
+    )
+
+    return d
 
 
 # ============================================================
-# INDICATEURS
+# FEATURES
 # ============================================================
 
-def zscore(series: pd.Series, n: int) -> pd.Series:
-    mean = series.rolling(n).mean()
-    std = series.rolling(n).std()
+def make_features(d):
 
-    return (series - mean) / std.replace(0, np.nan)
+    c = d["close"]
+    h = d["high"]
+    l = d["low"]
+    v = d["volume"]
 
-
-def rsi(series: pd.Series, n: int = 14) -> pd.Series:
-    delta = series.diff()
-
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-
-    avg_gain = gain.ewm(
-        alpha=1 / n,
-        adjust=False,
-        min_periods=n,
-    ).mean()
-
-    avg_loss = loss.ewm(
-        alpha=1 / n,
-        adjust=False,
-        min_periods=n,
-    ).mean()
-
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-
-    return 100 - (100 / (1 + rs))
-
-
-def atr(df: pd.DataFrame, n: int = 14) -> pd.Series:
-    prev_close = df["close"].shift(1)
+    prev = c.shift()
 
     tr = pd.concat(
         [
-            df["high"] - df["low"],
-            (df["high"] - prev_close).abs(),
-            (df["low"] - prev_close).abs(),
+            h - l,
+            (h - prev).abs(),
+            (l - prev).abs(),
         ],
         axis=1,
     ).max(axis=1)
 
-    return tr.ewm(
-        alpha=1 / n,
+    delta = c.diff()
+
+    up = delta.clip(lower=0)
+    down = -delta.clip(upper=0)
+
+    avg_up = up.ewm(
+        alpha=1 / 14,
         adjust=False,
-        min_periods=n,
     ).mean()
 
+    avg_down = down.ewm(
+        alpha=1 / 14,
+        adjust=False,
+    ).mean()
 
-def rolling_vwap(df: pd.DataFrame, n: int) -> pd.Series:
+    rs = avg_up / avg_down.replace(
+        0,
+        np.nan,
+    )
+
+    atr = tr.ewm(
+        alpha=1 / 14,
+        adjust=False,
+    ).mean()
+
+    ema9 = c.ewm(
+        span=9,
+        adjust=False,
+    ).mean()
+
+    ema20 = c.ewm(
+        span=20,
+        adjust=False,
+    ).mean()
+
+    ema50 = c.ewm(
+        span=50,
+        adjust=False,
+    ).mean()
+
+    ema200 = c.ewm(
+        span=200,
+        adjust=False,
+    ).mean()
+
+    mean20 = c.rolling(20).mean()
+    sd20 = c.rolling(20).std()
+
+    z = (
+        (c - mean20)
+        / sd20.replace(0, np.nan)
+    )
+
+    vmean = v.rolling(20).mean()
+
     typical = (
-        df["high"]
-        + df["low"]
-        + df["close"]
+        h + l + c
     ) / 3
 
-    pv = typical * df["volume"]
+    out = {
+        "c": c.to_numpy(float),
+        "h": h.to_numpy(float),
+        "l": l.to_numpy(float),
+        "v": v.to_numpy(float),
 
-    return (
-        pv.rolling(n).sum()
-        / df["volume"].rolling(n).sum()
+        "rsi": (
+            100 - 100 / (1 + rs)
+        ).to_numpy(float),
+
+        "atr": atr.to_numpy(float),
+
+        "ema9": ema9.to_numpy(float),
+        "ema20": ema20.to_numpy(float),
+        "ema50": ema50.to_numpy(float),
+        "ema200": ema200.to_numpy(float),
+
+        "z20": z.to_numpy(float),
+
+        "vol_ratio": (
+            v / vmean.replace(0, np.nan)
+        ).to_numpy(float),
+
+        "vwap48": (
+            (typical * v).rolling(48).sum()
+            /
+            v.rolling(48).sum()
+        ).to_numpy(float),
+
+        "vwap96": (
+            (typical * v).rolling(96).sum()
+            /
+            v.rolling(96).sum()
+        ).to_numpy(float),
+
+        "atr_pct": (
+            atr / c
+        ).to_numpy(float),
+
+        "ret": c.pct_change().to_numpy(float),
+    }
+
+    out["ema20_slope"] = (
+        ema20.pct_change(6)
+        .to_numpy(float)
     )
+
+    out["ema50_slope"] = (
+        ema50.pct_change(12)
+        .to_numpy(float)
+    )
+
+    out["ema_sep"] = (
+        (ema20 - ema50) / c
+    ).to_numpy(float)
+
+    out["dist200"] = (
+        (c - ema200) / ema200
+    ).to_numpy(float)
+
+    return out
+
+
+def align_1h(
+    entry,
+    h1,
+    ctx_iv,
+):
+
+    f = make_features(h1)
+
+    x = pd.DataFrame(
+        {
+            "time": h1["time"].to_numpy(),
+
+            **{
+                k: f[k]
+                for k in (
+                    "c",
+                    "ema20",
+                    "ema50",
+                    "ema200",
+                    "atr",
+                    "rsi",
+                    "ema20_slope",
+                    "ema50_slope",
+                    "ema_sep",
+                    "dist200",
+                )
+            },
+        }
+    )
+
+    x["time"] += INTERVAL_MS[ctx_iv]
+
+    e = pd.DataFrame(
+        {
+            "time": entry["time"].to_numpy()
+        }
+    )
+
+    return pd.merge_asof(
+        e.sort_values("time"),
+        x.sort_values("time"),
+        on="time",
+        direction="backward",
+    )
+
+
+def context_masks(
+    entry,
+    h1,
+    ctx_iv,
+):
+
+    a = align_1h(
+        entry,
+        h1,
+        ctx_iv,
+    )
+
+    c = a["c"].to_numpy(float)
+    e20 = a["ema20"].to_numpy(float)
+    e50 = a["ema50"].to_numpy(float)
+    e200 = a["ema200"].to_numpy(float)
+    s20 = a["ema20_slope"].to_numpy(float)
+    s50 = a["ema50_slope"].to_numpy(float)
+    sep = a["ema_sep"].to_numpy(float)
+    d200 = a["dist200"].to_numpy(float)
+
+    valid = np.isfinite(
+        np.column_stack(
+            [
+                c,
+                e20,
+                e50,
+                e200,
+                s20,
+                s50,
+                sep,
+                d200,
+            ]
+        )
+    ).all(axis=1)
+
+    trend_up = (
+        valid
+        & (e20 > e50)
+        & (c > e200)
+        & (sep >= 0.0025)
+        & (d200 <= 0.045)
+    )
+
+    trend_down = (
+        valid
+        & (e20 < e50)
+        & (c < e200)
+        & (sep <= -0.0025)
+        & (d200 >= -0.045)
+    )
+
+    trend = trend_up | trend_down
+
+    rng = (
+        valid
+        & (np.abs(sep) < 0.0025)
+        & (np.abs(d200) < 0.02)
+    )
+
+    return {
+        "all": valid,
+        "trend": trend,
+        "range": rng,
+        "trend_up": trend_up,
+        "trend_down": trend_down,
+    }, a
 
 
 # ============================================================
 # SIGNALS
 # ============================================================
 
-def signal_series(
-    df: pd.DataFrame,
-    family: str,
-    params: dict,
-    regime: str,
-) -> pd.Series:
+@dataclass
+class Candidate:
+    name: str
+    signal: np.ndarray
+    regime: str
 
-    close = df["close"]
 
-    signal = pd.Series(
-        False,
-        index=df.index,
+def sig(long, short):
+
+    x = np.zeros(
+        len(long),
+        dtype=np.int8,
     )
 
-    if family == "zscore":
+    x[long] = 1
+    x[short] = -1
 
-        n = params["n"]
-        threshold = params["threshold"]
+    return x
 
-        z = zscore(close, n)
 
-        signal = z <= -threshold
+def build_signal(
+    name,
+    p,
+    f,
+):
 
-    elif family == "donchian":
+    c = f["c"]
+    h = f["h"]
+    l = f["l"]
 
-        n = params["n"]
-        vol_mult = params["vol"]
+    if name == "vwap":
 
-        low = df["low"].rolling(n).min()
+        vw = f[
+            f"vwap{p['n']}"
+        ]
 
-        volume_ma = (
-            df["volume"]
-            .rolling(n)
-            .mean()
+        dist = (
+            c - vw
+        ) / f["atr"]
+
+        return sig(
+            dist < -p["k"],
+            dist > p["k"],
         )
 
-        signal = (
-            (close <= low)
-            &
-            (
-                df["volume"]
-                >= volume_ma * vol_mult
-            )
-        )
+    if name == "donchian":
 
-    elif family == "pullback":
+        n = p["n"]
 
-        r = rsi(close, 14)
-
-        signal = r <= params["rsi"]
-
-    elif family == "vwap":
-
-        v = rolling_vwap(
-            df,
-            params["n"],
-        )
-
-        deviation = (
-            close - v
-        ) / v
-
-        signal = (
-            deviation
-            <= -params["k"] * 0.01
-        )
-
-    elif family == "breakout":
-
-        n = params["n"]
-
-        high = (
-            df["high"]
+        hi = (
+            pd.Series(h)
             .rolling(n)
             .max()
             .shift(1)
+            .to_numpy()
         )
 
-        signal = close > high
-
-    else:
-        raise ValueError(
-            f"Famille inconnue: {family}"
+        lo = (
+            pd.Series(l)
+            .rolling(n)
+            .min()
+            .shift(1)
+            .to_numpy()
         )
 
-    # --------------------------------------------------------
-    # Régime
-    # --------------------------------------------------------
+        vr = f["vol_ratio"]
 
-    if regime == "trend":
+        return sig(
+            (c > hi)
+            & (vr > p["vol"]),
+            (c < lo)
+            & (vr > p["vol"]),
+        )
 
-        ema = close.ewm(
-            span=50,
-            adjust=False,
+    if name == "zscore":
+
+        z = pd.Series(c).rolling(
+            p["n"]
         ).mean()
 
-        signal &= close > ema
+        sd = pd.Series(c).rolling(
+            p["n"]
+        ).std()
 
-    elif regime == "all":
-        pass
+        zz = (
+            (
+                pd.Series(c) - z
+            )
+            / sd.replace(0, np.nan)
+        ).to_numpy()
 
-    else:
-        raise ValueError(
-            f"Régime inconnu: {regime}"
+        return sig(
+            zz < -p["thr"],
+            zz > p["thr"],
         )
 
-    return signal.fillna(False)
+    if name == "pullback":
+
+        r = f["rsi"]
+
+        up = (
+            (f["ema20"] > f["ema50"])
+            & (c > f["ema200"])
+        )
+
+        dn = (
+            (f["ema20"] < f["ema50"])
+            & (c < f["ema200"])
+        )
+
+        return sig(
+            up & (r < p["rsi"]),
+            dn & (r > 100 - p["rsi"]),
+        )
+
+    if name == "breakout":
+
+        n = p["n"]
+
+        hi = (
+            pd.Series(h)
+            .rolling(n)
+            .max()
+            .shift(1)
+            .to_numpy()
+        )
+
+        lo = (
+            pd.Series(l)
+            .rolling(n)
+            .min()
+            .shift(1)
+            .to_numpy()
+        )
+
+        atrp = f["atr_pct"]
+
+        base = (
+            pd.Series(atrp)
+            .rolling(50)
+            .mean()
+            .to_numpy()
+        )
+
+        exp = atrp > base
+
+        return sig(
+            (c > hi) & exp,
+            (c < lo) & exp,
+        )
+
+    raise ValueError(name)
 
 
-# ============================================================
-# CONFIGURATIONS
-# ============================================================
+def make_candidates(
+    entry,
+    h1,
+    ctx_iv,
+):
 
-def candidate_configs():
-    configs = []
+    f = make_features(entry)
 
-    for n in [30, 60]:
-        for threshold in [2.0, 2.5]:
-            for regime in ["all", "trend"]:
-                configs.append(
-                    {
-                        "family": "zscore",
-                        "params": {
-                            "n": n,
-                            "threshold": threshold,
-                        },
-                        "regime": regime,
-                    }
+    masks, ctx = context_masks(
+        entry,
+        h1,
+        ctx_iv,
+    )
+
+    result = []
+
+    for name, p in SIGNALS:
+
+        base = build_signal(
+            name,
+            p,
+            f,
+        )
+
+        for regime in REGIMES:
+
+            m = masks[regime].copy()
+
+            s = base.copy()
+            s[~m] = 0
+
+            if not np.any(s):
+                continue
+
+            label = (
+                name
+                + "".join(
+                    f" {k}={v}"
+                    for k, v in p.items()
                 )
-
-    for n in [20, 50]:
-        for vol in [0.0, 1.5]:
-            for regime in ["all", "trend"]:
-                configs.append(
-                    {
-                        "family": "donchian",
-                        "params": {
-                            "n": n,
-                            "vol": vol,
-                        },
-                        "regime": regime,
-                    }
-                )
-
-    for rsi_level in [40]:
-        for regime in ["all", "trend"]:
-            configs.append(
-                {
-                    "family": "pullback",
-                    "params": {
-                        "rsi": rsi_level,
-                    },
-                    "regime": regime,
-                }
             )
 
-    for n in [48, 96]:
-        for k in [2.0, 3.0]:
-            for regime in ["all", "trend"]:
-                configs.append(
-                    {
-                        "family": "vwap",
-                        "params": {
-                            "n": n,
-                            "k": k,
-                        },
-                        "regime": regime,
-                    }
+            result.append(
+                Candidate(
+                    label,
+                    s,
+                    regime,
                 )
-
-    for n in [20]:
-        for regime in ["all", "trend"]:
-            configs.append(
-                {
-                    "family": "breakout",
-                    "params": {
-                        "n": n,
-                    },
-                    "regime": regime,
-                }
             )
 
-    return configs
+    return f, result
 
 
 # ============================================================
-# TRADE ENGINE
+# SIMULATION
 # ============================================================
 
-def simulate_trades(
-    df: pd.DataFrame,
-    signal: pd.Series,
-    start_idx: int,
-    end_idx: int,
-    profile: str = "maker_both",
-) -> list[float]:
+def simulate(
+    L,
+    signal,
+    tp_m,
+    sl_m,
+    hold,
+    profile,
+    slip,
+    fee_scale=1.0,
+    slip_scale=1.0,
+):
+
+    c = L["c"]
+    h = L["h"]
+    lo = L["l"]
+    atr = L["atr"]
+
+    slip *= slip_scale
+
+    maker_tp_fill = (
+        profile
+        in ("maker_tp", "maker_both")
+    )
 
     trades = []
+    free = 0
 
-    i = max(start_idx, 1)
+    for j in np.flatnonzero(signal):
 
-    while i < end_idx - 1:
-
-        if not bool(signal.iloc[i]):
-            i += 1
+        if (
+            j < free
+            or j + 1 >= len(c)
+            or not np.isfinite(atr[j])
+        ):
             continue
 
-        entry_idx = i + 1
+        side = int(signal[j])
+        a = atr[j]
 
-        if entry_idx >= end_idx:
-            break
-
-        entry = float(
-            df["open"].iloc[entry_idx]
-        )
-
-        future = df.iloc[
-            entry_idx + 1 : end_idx
-        ]
-
-        if future.empty:
-            break
-
-        # ----------------------------------------------------
-        # Sortie simplifiée :
-        # signal suivant = sortie.
-        #
-        # Ceci conserve le principe V4.1 :
-        # signal clôturé -> entrée suivante.
-        # ----------------------------------------------------
-
-        exit_idx = None
-
-        for j in range(
-            entry_idx + 1,
-            end_idx,
-        ):
-            if bool(signal.iloc[j]):
-                exit_idx = j
-                break
-
-        if exit_idx is None:
-            exit_idx = end_idx - 1
-
-        exit_price = float(
-            df["close"].iloc[exit_idx]
-        )
-
-        gross = (
-            exit_price / entry
-            - 1.0
-        )
+        if a <= 0:
+            continue
 
         if profile == "maker_both":
-            cost = (
-                MAKER_FEE
-                + MAKER_FEE
+
+            if side == 1:
+
+                if (
+                    lo[j + 1]
+                    > c[j] * (1 - THROUGH)
+                ):
+                    continue
+
+                entry = c[j]
+
+            else:
+
+                if (
+                    h[j + 1]
+                    < c[j] * (1 + THROUGH)
+                ):
+                    continue
+
+                entry = c[j]
+
+            entry_fee = (
+                FEE_MAKER
+                * fee_scale
             )
-        elif profile == "maker_tp":
-            cost = (
-                MAKER_FEE
-                + TAKER_FEE
-            )
+
         else:
-            cost = (
-                TAKER_FEE
-                + TAKER_FEE
+
+            entry = (
+                c[j + 1]
+                * (1 + side * slip)
             )
 
-        net = gross - cost
+            entry_fee = (
+                FEE_TAKER
+                * fee_scale
+            )
 
-        trades.append(net)
+        tp = (
+            entry
+            + side * tp_m * a
+        )
 
-        i = exit_idx + 1
+        sl = (
+            entry
+            - side * sl_m * a
+        )
+
+        tp_touch = (
+            tp * (1 + side * THROUGH)
+            if maker_tp_fill
+            else tp
+        )
+
+        end = min(
+            j + hold,
+            len(c) - 1,
+        )
+
+        exit_i = end
+        exit_px = c[end]
+        kind = "time"
+
+        for k in range(
+            j + 1,
+            end + 1,
+        ):
+
+            hit_tp = (
+                h[k] >= tp_touch
+                if side == 1
+                else lo[k] <= tp_touch
+            )
+
+            hit_sl = (
+                lo[k] <= sl
+                if side == 1
+                else h[k] >= sl
+            )
+
+            if hit_sl:
+
+                exit_i = k
+
+                exit_px = (
+                    sl
+                    * (1 - side * slip)
+                )
+
+                kind = "sl"
+                break
+
+            if hit_tp:
+
+                if maker_tp_fill:
+
+                    exit_px = tp
+                    kind = "tp"
+
+                else:
+
+                    exit_px = (
+                        tp
+                        * (1 - side * slip)
+                    )
+
+                    kind = "tp"
+
+                exit_i = k
+                break
+
+        if kind == "time":
+
+            exit_px *= (
+                1 - side * slip
+            )
+
+        exit_fee = (
+            FEE_MAKER
+            if (
+                kind == "tp"
+                and profile != "taker"
+            )
+            else FEE_TAKER
+        ) * fee_scale
+
+        gross = (
+            side
+            * (exit_px - entry)
+            / entry
+        )
+
+        net = (
+            (1 + gross)
+            * (1 - entry_fee)
+            * (1 - exit_fee)
+            - 1
+        )
+
+        trades.append(
+            {
+                "signal_i": j,
+                "entry_i": j + 1,
+                "exit_i": exit_i,
+                "gross": gross,
+                "net": net,
+                "kind": kind,
+                "side": side,
+                "duration": exit_i - j,
+            }
+        )
+
+        free = exit_i + 1
 
     return trades
 
 
-# ============================================================
-# STATISTIQUES
-# ============================================================
+def inside(
+    trades,
+    start,
+    end,
+):
 
-def profit_factor(
-    trades: list[float],
-) -> float:
-
-    if not trades:
-        return float("nan")
-
-    gains = sum(
-        x for x in trades
-        if x > 0
-    )
-
-    losses = abs(
-        sum(
-            x for x in trades
-            if x < 0
+    return [
+        t
+        for t in trades
+        if (
+            start <= t["signal_i"] < end
+            and start <= t["entry_i"] < end
+            and t["exit_i"] < end
         )
-    )
-
-    if losses == 0:
-        return float("inf") if gains > 0 else 0.0
-
-    return gains / losses
-
-
-def max_drawdown(
-    trades: list[float],
-) -> float:
-
-    if not trades:
-        return float("nan")
-
-    equity = 1.0
-    peak = 1.0
-    max_dd = 0.0
-
-    for ret in trades:
-
-        equity *= (
-            1.0 + ret
-        )
-
-        peak = max(
-            peak,
-            equity,
-        )
-
-        dd = (
-            equity / peak
-            - 1.0
-        )
-
-        max_dd = min(
-            max_dd,
-            dd,
-        )
-
-    return max_dd
-
-
-def mean_return(
-    trades: list[float],
-) -> float:
-
-    if not trades:
-        return float("nan")
-
-    return float(
-        np.mean(trades)
-    )
-
-
-def t_stat(
-    trades: list[float],
-) -> float:
-
-    if len(trades) < 2:
-        return float("nan")
-
-    std = np.std(
-        trades,
-        ddof=1,
-    )
-
-    if std == 0:
-        return float("inf") if np.mean(trades) > 0 else 0.0
-
-    return (
-        np.mean(trades)
-        /
-        (
-            std
-            /
-            math.sqrt(len(trades))
-        )
-    )
-
-
-# ============================================================
-# RANDOM BENCHMARK
-# ============================================================
-
-def random_reference(
-    df: pd.DataFrame,
-    signal: pd.Series,
-    start_idx: int,
-    end_idx: int,
-    n_draws: int = 100,
-    seed: int = MC_SEED,
-) -> float:
-
-    rng = random.Random(seed)
-
-    signal_positions = [
-        i
-        for i in range(
-            start_idx,
-            end_idx,
-        )
-        if bool(signal.iloc[i])
     ]
 
-    if not signal_positions:
-        return float("nan")
 
-    results = []
+# ============================================================
+# STATISTICS
+# ============================================================
 
-    for _ in range(n_draws):
+def stats(trades):
 
-        sampled = rng.sample(
-            signal_positions,
-            min(
-                len(signal_positions),
-                max(
-                    1,
-                    len(signal_positions),
-                ),
-            ),
+    if not trades:
+
+        return {
+            "n": 0,
+            "mean": np.nan,
+            "se": np.nan,
+            "t": np.nan,
+            "gross": np.nan,
+            "fees": np.nan,
+            "slip": np.nan,
+            "win": np.nan,
+            "pf": np.nan,
+            "median": np.nan,
+            "p25": np.nan,
+            "p75": np.nan,
+            "dd": np.nan,
+            "ret": np.nan,
+        }
+
+    net = np.array(
+        [t["net"] for t in trades],
+        float,
+    )
+
+    gross = np.array(
+        [t["gross"] for t in trades],
+        float,
+    )
+
+    eq = np.cumprod(
+        1 + net
+    )
+
+    peak = np.maximum.accumulate(
+        eq
+    )
+
+    dd = (
+        eq / peak
+        - 1
+    )
+
+    wins = net[net > 0]
+    losses = net[net < 0]
+
+    pf = (
+        np.sum(wins)
+        / abs(np.sum(losses))
+        if len(losses)
+        else np.inf
+    )
+
+    gross_mean = gross.mean()
+    net_mean = net.mean()
+
+    cost_mean = (
+        gross_mean - net_mean
+    )
+
+    se = (
+        net.std(ddof=1)
+        / math.sqrt(len(net))
+        if len(net) > 1
+        else np.nan
+    )
+
+    t_stat = (
+        net_mean / se
+        if se and se > 0
+        else np.nan
+    )
+
+    return {
+        "n": len(net),
+        "mean": net_mean,
+        "se": se,
+        "t": t_stat,
+        "gross": gross_mean,
+        "fees": cost_mean,
+        "slip": 0.0,
+        "win": float(
+            np.mean(net > 0)
+        ),
+        "pf": pf,
+        "median": np.median(net),
+        "p25": np.percentile(
+            net,
+            25,
+        ),
+        "p75": np.percentile(
+            net,
+            75,
+        ),
+        "dd": dd.min(),
+        "ret": eq[-1] - 1,
+    }
+
+
+def score(s):
+
+    if s["n"] < MIN_TRAIN_TRADES:
+        return -np.inf
+
+    pf = (
+        2
+        if np.isinf(s["pf"])
+        else np.clip(
+            s["pf"] - 1,
+            -1,
+            2,
+        )
+    )
+
+    mean = np.clip(
+        s["mean"] * 1000,
+        -2,
+        2,
+    )
+
+    dd = np.clip(
+        abs(s["dd"]) * 10,
+        0,
+        2,
+    )
+
+    return (
+        0.50 * mean
+        + 0.30 * pf
+        + 0.20 * min(
+            math.log1p(s["n"]) / 6,
+            1,
+        )
+        - 0.15 * dd
+    )
+
+
+def monte_carlo(
+    trades,
+    capital,
+    runs=MC_RUNS,
+    seed=MC_SEED,
+):
+
+    if len(trades) < 20:
+
+        return {
+            "median": np.nan,
+            "p05": np.nan,
+            "p95": np.nan,
+            "dd": np.nan,
+        }
+
+    rng = np.random.default_rng(
+        seed
+    )
+
+    r = np.array(
+        [t["net"] for t in trades],
+        float,
+    )
+
+    finals = []
+    dds = []
+
+    for _ in range(runs):
+
+        x = rng.choice(
+            r,
+            len(r),
+            replace=True,
         )
 
-        sampled = set(sampled)
-
-        random_signal = pd.Series(
-            False,
-            index=df.index,
+        eq = (
+            capital
+            * np.cumprod(1 + x)
         )
 
-        for idx in sampled:
-            random_signal.iloc[idx] = True
-
-        trades = simulate_trades(
-            df,
-            random_signal,
-            start_idx,
-            end_idx,
-            "maker_both",
+        peak = np.maximum.accumulate(
+            eq
         )
 
-        if trades:
-            results.append(
-                mean_return(trades)
+        finals.append(
+            eq[-1]
+        )
+
+        dds.append(
+            np.min(
+                eq / peak - 1
+            )
+        )
+
+    return {
+        "median": np.median(finals),
+        "p05": np.percentile(
+            finals,
+            5,
+        ),
+        "p95": np.percentile(
+            finals,
+            95,
+        ),
+        "dd": np.median(dds),
+    }
+
+
+# ============================================================
+# BENCHMARKS
+# ============================================================
+
+def benchmark_fixed(
+    L,
+    start,
+    end,
+    hold=12,
+):
+
+    signal = np.zeros(
+        len(L["c"]),
+        dtype=np.int8,
+    )
+
+    signal[
+        start:end:hold
+    ] = 1
+
+    return simulate(
+        L,
+        signal,
+        2.0,
+        1.0,
+        hold,
+        "taker",
+        DEFAULT_SLIP,
+    )
+
+
+def benchmark_random_side(
+    L,
+    candidate_signal,
+    tp_m,
+    sl_m,
+    hold,
+    profile,
+    slip,
+    start,
+    end,
+    seed,
+):
+
+    rng = np.random.default_rng(
+        seed
+    )
+
+    idx = np.flatnonzero(
+        candidate_signal
+    )
+
+    rand_signal = np.zeros(
+        len(candidate_signal),
+        dtype=np.int8,
+    )
+
+    rand_signal[idx] = rng.choice(
+        [-1, 1],
+        size=len(idx),
+    )
+
+    trades = simulate(
+        L,
+        rand_signal,
+        tp_m,
+        sl_m,
+        hold,
+        profile,
+        slip,
+    )
+
+    return inside(
+        trades,
+        start,
+        end,
+    )
+
+
+def benchmark_random_side_mc(
+    L,
+    candidate_signal,
+    tp_m,
+    sl_m,
+    hold,
+    profile,
+    slip,
+    start,
+    end,
+    seed,
+    runs=RANDOM_SIDE_RUNS,
+):
+
+    means = []
+    ns = []
+
+    for i in range(runs):
+
+        trades = benchmark_random_side(
+            L,
+            candidate_signal,
+            tp_m,
+            sl_m,
+            hold,
+            profile,
+            slip,
+            start,
+            end,
+            seed=seed + i,
+        )
+
+        z = stats(trades)
+
+        if np.isfinite(z["mean"]):
+
+            means.append(
+                z["mean"]
             )
 
-    if not results:
-        return float("nan")
+            ns.append(
+                z["n"]
+            )
 
-    return float(
-        np.mean(results)
+    if not means:
+
+        return {
+            "mean": np.nan,
+            "se": np.nan,
+            "n": 0,
+            "p05": np.nan,
+            "p95": np.nan,
+        }
+
+    a = np.asarray(
+        means,
+        dtype=float,
     )
 
-
-# ============================================================
-# FOLD
-# ============================================================
-
-@dataclass
-class FoldResult:
-
-    symbol: str
-    fold: int
-
-    family: str
-    params: str
-    regime: str
-    profile: str
-
-    test_return: float
-    random_return: float
-    edge_random: float
-
-    pf: float
-    dd: float
-    mean_trade: float
-    std_trade: float
-    t_stat: float
-
-    trades: int
-    positive_trades: int
-
-    valid: bool
-
-
-def run_fold(
-    symbol: str,
-    df: pd.DataFrame,
-    config: dict,
-    fold: int,
-    train_start: int,
-    train_end: int,
-    test_start: int,
-    test_end: int,
-) -> FoldResult:
-
-    signal = signal_series(
-        df,
-        config["family"],
-        config["params"],
-        config["regime"],
-    )
-
-    trades = simulate_trades(
-        df,
-        signal,
-        test_start,
-        test_end,
-        "maker_both",
-    )
-
-    n = len(trades)
-
-    if n == 0:
-
-        return FoldResult(
-            symbol=symbol,
-            fold=fold,
-            family=config["family"],
-            params=str(config["params"]),
-            regime=config["regime"],
-            profile="maker_both",
-            test_return=float("nan"),
-            random_return=float("nan"),
-            edge_random=float("nan"),
-            pf=float("nan"),
-            dd=float("nan"),
-            mean_trade=float("nan"),
-            std_trade=float("nan"),
-            t_stat=float("nan"),
-            trades=0,
-            positive_trades=0,
-            valid=False,
-        )
-
-    test_return = mean_return(trades)
-
-    random_return = random_reference(
-        df,
-        signal,
-        test_start,
-        test_end,
-    )
-
-    edge = (
-        test_return - random_return
-        if not math.isnan(random_return)
-        else float("nan")
-    )
-
-    std = (
-        float(
+    return {
+        "mean": float(
+            np.mean(a)
+        ),
+        "se": float(
             np.std(
-                trades,
+                a,
                 ddof=1,
             )
+            / math.sqrt(len(a))
         )
-        if n >= 2
-        else float("nan")
+        if len(a) > 1
+        else np.nan,
+        "n": int(
+            round(np.mean(ns))
+        ),
+        "p05": float(
+            np.percentile(a, 5)
+        ),
+        "p95": float(
+            np.percentile(a, 95)
+        ),
+    }
+
+
+def benchmark_buy_hold(
+    L,
+    start,
+    end,
+):
+
+    if end <= start + 1:
+        return []
+
+    entry = L["c"][start]
+    exit_ = L["c"][end - 1]
+
+    gross = (
+        exit_ / entry - 1
     )
 
-    return FoldResult(
-        symbol=symbol,
-        fold=fold,
-        family=config["family"],
-        params=str(config["params"]),
-        regime=config["regime"],
-        profile="maker_both",
-        test_return=test_return,
-        random_return=random_return,
-        edge_random=edge,
-        pf=profit_factor(trades),
-        dd=max_drawdown(trades),
-        mean_trade=test_return,
-        std_trade=std,
-        t_stat=t_stat(trades),
-        trades=n,
-        positive_trades=sum(
-            x > 0
-            for x in trades
-        ),
-        valid=n >= MIN_TRADES_PER_FOLD,
+    fee = FEE_TAKER * 2
+
+    net = (
+        (1 + gross)
+        * (1 - fee) ** 2
+        - 1
     )
+
+    return [
+        {
+            "signal_i": start,
+            "entry_i": start,
+            "exit_i": end - 1,
+            "gross": gross,
+            "net": net,
+            "kind": "benchmark",
+            "side": 1,
+            "duration": end - start,
+        }
+    ]
 
 
 # ============================================================
 # WALK FORWARD
 # ============================================================
 
-def build_folds(
-    df: pd.DataFrame,
-) -> list[tuple[int, int, int, int]]:
+def make_folds(
+    n,
+    interval,
+):
 
-    total_days = (
-        df["timestamp"].iloc[-1]
-        - df["timestamp"].iloc[0]
-    ).total_seconds() / 86400
+    bars = int(
+        86_400_000
+        / INTERVAL_MS[interval]
+    )
+
+    train = (
+        TRAIN_DAYS * bars
+    )
+
+    test = (
+        TEST_DAYS * bars
+    )
+
+    holdout = (
+        FINAL_HOLDOUT_DAYS
+        * bars
+    )
+
+    usable = n - holdout
 
     folds = []
+    s = 0
 
-    start = 0
-
-    while True:
-
-        train_end_time = (
-            df["timestamp"].iloc[0]
-            + timedelta(
-                days=WF_TRAIN_DAYS
-            )
-        )
-
-        if start > 0:
-            train_start_time = (
-                df["timestamp"].iloc[start]
-            )
-            train_end_time = (
-                train_start_time
-                + timedelta(
-                    days=WF_TRAIN_DAYS
-                )
-            )
-        else:
-            train_start_time = (
-                df["timestamp"].iloc[0]
-            )
-
-        test_start_time = train_end_time
-
-        test_end_time = (
-            test_start_time
-            + timedelta(
-                days=WF_TEST_DAYS
-            )
-        )
-
-        if (
-            test_end_time
-            + timedelta(
-                days=FINAL_HOLDOUT_DAYS
-            )
-            >= df["timestamp"].iloc[-1]
-        ):
-            break
-
-        train_start = int(
-            df["timestamp"].searchsorted(
-                train_start_time
-            )
-        )
-
-        train_end = int(
-            df["timestamp"].searchsorted(
-                train_end_time
-            )
-        )
-
-        test_start = int(
-            df["timestamp"].searchsorted(
-                test_start_time
-            )
-        )
-
-        test_end = int(
-            df["timestamp"].searchsorted(
-                test_end_time
-            )
-        )
-
-        if test_end <= test_start:
-            break
+    while (
+        s + train + test
+        <= usable
+    ):
 
         folds.append(
             (
-                train_start,
-                train_end,
-                test_start,
-                test_end,
+                s,
+                s + train,
+                s + train,
+                s + train + test,
             )
         )
 
-        next_start_time = (
-            test_start_time
-            + timedelta(
-                days=WF_TEST_DAYS
-            )
+        s += (
+            STEP_DAYS
+            * bars
         )
 
-        next_start = int(
-            df["timestamp"].searchsorted(
-                next_start_time
-            )
-        )
+    final_start = usable
 
-        if next_start <= start:
-            break
-
-        start = next_start
-
-    return folds
+    return folds, final_start
 
 
 # ============================================================
-# ROBUSTNESS
+# STRESS
 # ============================================================
 
-@dataclass
-class Robustness:
-
-    symbol: str
-    family: str
-    params: str
-    regime: str
-    profile: str
-
-    folds_total: int
-    folds_active: int
-    total_trades: int
-
-    mean_oos: float
-    median_oos: float
-    std_oos: float
-    t_stat_oos: float
-
-    positive_fold_ratio: float
-    beat_random_ratio: float
-
-    median_pf: float
-    median_dd: float
-    median_edge_random: float
-
-    robust: bool
-    robustness_score: float
-
-
-def calculate_robustness(
-    symbol: str,
-    fold_results: list[FoldResult],
-) -> Robustness:
-
-    valid = [
-        x
-        for x in fold_results
-        if x.valid
-        and not math.isnan(x.test_return)
-    ]
-
-    if not valid:
-
-        return Robustness(
-            symbol=symbol,
-            family="",
-            params="",
-            regime="",
-            profile="",
-            folds_total=len(fold_results),
-            folds_active=0,
-            total_trades=0,
-            mean_oos=float("nan"),
-            median_oos=float("nan"),
-            std_oos=float("nan"),
-            t_stat_oos=float("nan"),
-            positive_fold_ratio=0.0,
-            beat_random_ratio=0.0,
-            median_pf=float("nan"),
-            median_dd=float("nan"),
-            median_edge_random=float("nan"),
-            robust=False,
-            robustness_score=-999.0,
-        )
-
-    returns = [
-        x.test_return
-        for x in valid
-    ]
-
-    edges = [
-        x.edge_random
-        for x in valid
-        if not math.isnan(x.edge_random)
-    ]
-
-    pfs = [
-        x.pf
-        for x in valid
-        if not math.isnan(x.pf)
-    ]
-
-    dds = [
-        x.dd
-        for x in valid
-        if not math.isnan(x.dd)
-    ]
-
-    total_trades = sum(
-        x.trades
-        for x in valid
-    )
-
-    positive_ratio = (
-        sum(
-            x.test_return > 0
-            for x in valid
-        )
-        / len(valid)
-    )
-
-    beat_random_ratio = (
-        sum(
-            x.edge_random > 0
-            for x in valid
-        )
-        / len(edges)
-        if edges
-        else 0.0
-    )
-
-    mean_oos = float(
-        np.mean(returns)
-    )
-
-    median_oos = float(
-        np.median(returns)
-    )
-
-    std_oos = float(
-        np.std(
-            returns,
-            ddof=1,
-        )
-    ) if len(returns) >= 2 else float("nan")
-
-    if std_oos > 0:
-        t_oos = (
-            mean_oos
-            /
-            (
-                std_oos
-                /
-                math.sqrt(len(returns))
-            )
-        )
-    else:
-        t_oos = float("nan")
-
-    median_pf = float(
-        np.median(pfs)
-    ) if pfs else float("nan")
-
-    median_dd = float(
-        np.median(dds)
-    ) if dds else float("nan")
-
-    median_edge = float(
-        np.median(edges)
-    ) if edges else float("nan")
-
-    robust = (
-        len(valid)
-        >= MIN_ACTIVE_FOLDS
-        and total_trades
-        >= MIN_TOTAL_TRADES
-        and positive_ratio
-        >= MIN_POSITIVE_FOLD_RATIO
-        and beat_random_ratio
-        >= MIN_BEAT_RANDOM_RATIO
-        and not math.isnan(median_pf)
-        and median_pf
-        >= MIN_MEDIAN_PF
-        and not math.isnan(median_edge)
-        and median_edge
-        >= MIN_MEDIAN_EDGE_RANDOM
-    )
-
-    # --------------------------------------------------------
-    # Score de robustesse.
-    #
-    # Ce score sert à classer les candidats de recherche,
-    # pas à prétendre prédire les performances futures.
-    # --------------------------------------------------------
-
-    stability = (
-        positive_ratio
-        + beat_random_ratio
-    ) / 2.0
-
-    pf_component = (
-        max(
-            0.0,
-            min(
-                2.0,
-                median_pf,
-            ),
-        )
-        / 2.0
-    )
-
-    edge_component = (
-        max(
-            -0.01,
-            min(
-                0.01,
-                median_edge,
-            ),
-        )
-        + 0.01
-    ) / 0.02
-
-    sample_component = min(
-        1.0,
-        total_trades / 200.0,
-    )
-
-    fold_component = min(
-        1.0,
-        len(valid) / 10.0,
-    )
-
-    score = (
-        0.30 * stability
-        + 0.20 * pf_component
-        + 0.20 * edge_component
-        + 0.15 * sample_component
-        + 0.15 * fold_component
-    )
-
-    if not robust:
-        score *= 0.75
-
-    first = valid[0]
-
-    return Robustness(
-        symbol=symbol,
-        family=first.family,
-        params=first.params,
-        regime=first.regime,
-        profile=first.profile,
-        folds_total=len(fold_results),
-        folds_active=len(valid),
-        total_trades=total_trades,
-        mean_oos=mean_oos,
-        median_oos=median_oos,
-        std_oos=std_oos,
-        t_stat_oos=t_oos,
-        positive_fold_ratio=positive_ratio,
-        beat_random_ratio=beat_random_ratio,
-        median_pf=median_pf,
-        median_dd=median_dd,
-        median_edge_random=median_edge,
-        robust=robust,
-        robustness_score=score,
-    )
-
-
-# ============================================================
-# HOLDOUT
-# ============================================================
-
-def run_holdout(
-    symbol: str,
-    df: pd.DataFrame,
-    config: dict,
-) -> dict:
-
-    signal = signal_series(
-        df,
-        config["family"],
-        config["params"],
-        config["regime"],
-    )
-
-    holdout_start_time = (
-        df["timestamp"].iloc[-1]
-        - timedelta(
-            days=FINAL_HOLDOUT_DAYS
-        )
-    )
-
-    holdout_start = int(
-        df["timestamp"].searchsorted(
-            holdout_start_time
-        )
-    )
-
-    trades = simulate_trades(
-        df,
-        signal,
-        holdout_start,
-        len(df),
-        "maker_both",
-    )
-
-    return {
-        "symbol": symbol,
-        "family": config["family"],
-        "params": str(
-            config["params"]
-        ),
-        "regime": config["regime"],
-        "profile": "maker_both",
-        "holdout_return": mean_return(trades),
-        "pf": profit_factor(trades),
-        "dd": max_drawdown(trades),
-        "trades": len(trades),
-        "t_stat": t_stat(trades),
-    }
-
-
-# ============================================================
-# MAIN RESEARCH
-# ============================================================
-
-def config_from_robustness(
-    r: Robustness,
-) -> dict:
-
-    return {
-        "family": r.family,
-        "params": eval(
-            r.params,
-            {
-                "__builtins__": {}
-            },
-            {},
-        ),
-        "regime": r.regime,
-    }
-
-
-def run_symbol(
-    symbol: str,
-    interval: str,
-    days: int,
+def stress(
+    L,
+    candidate,
+    spec,
+    start,
+    end,
+    symbol,
 ):
 
-    print()
-    print("=" * 72)
-    print(
-        f"{symbol} {interval}"
-    )
-    print("=" * 72)
-
-    df = fetch_klines(
-        symbol,
-        interval,
-        days,
-    )
-
-    print(
-        f"Candles: {len(df):,}"
-    )
-
-    folds = build_folds(df)
-
-    print(
-        f"Folds: {len(folds)}"
-    )
-
-    configs = candidate_configs()
-
-    all_fold_results = []
-    robustness_rows = []
-
-    for cfg_no, config in enumerate(
-        configs,
-        start=1,
-    ):
-
-        fold_results = []
-
-        for fold_no, (
-            train_start,
-            train_end,
-            test_start,
-            test_end,
-        ) in enumerate(
-            folds,
-            start=1,
-        ):
-
-            result = run_fold(
-                symbol,
-                df,
-                config,
-                fold_no,
-                train_start,
-                train_end,
-                test_start,
-                test_end,
-            )
-
-            fold_results.append(result)
-            all_fold_results.append(result)
-
-        robustness = calculate_robustness(
-            symbol,
-            fold_results,
-        )
-
-        robustness_rows.append(
-            robustness
-        )
-
-    robustness_rows.sort(
-        key=lambda x: (
-            x.robust,
-            x.robustness_score,
-            x.median_edge_random,
-            x.median_pf,
+    scenarios = {
+        "base": (1.0, 1.0),
+        "fees+25%": (1.25, 1.0),
+        "fees+50%": (1.50, 1.0),
+        "fees+100%": (2.00, 1.0),
+        "slip+50%": (1.0, 1.50),
+        "slip+100%": (1.0, 2.00),
+        "fees+50%_slip+100%": (
+            1.50,
+            2.00,
         ),
-        reverse=True,
-    )
+    }
 
-    print()
-    print("TOP CANDIDATS")
-    print("-" * 72)
+    out = []
 
-    for r in robustness_rows[:10]:
+    for name, (
+        fs,
+        ss,
+    ) in scenarios.items():
 
-        print(
-            f"{r.family:10s} "
-            f"{r.params:28s} "
-            f"{r.regime:5s} "
-            f"robust={str(r.robust):5s} "
-            f"score={r.robustness_score:.3f} "
-            f"folds={r.folds_active}/{r.folds_total} "
-            f"trades={r.total_trades} "
-            f"mean={r.mean_oos:.4%} "
-            f"median={r.median_oos:.4%} "
-            f"PF={r.median_pf:.2f} "
-            f"edge={r.median_edge_random:.4%}"
+        tr = simulate(
+            L,
+            candidate.signal,
+            spec["tp"],
+            spec["sl"],
+            spec["hold"],
+            spec["profile"],
+            SLIP.get(
+                symbol,
+                DEFAULT_SLIP,
+            ),
+            fs,
+            ss,
         )
 
-    # --------------------------------------------------------
-    # Sélection.
-    #
-    # Priorité aux candidats robustes.
-    # Sinon le meilleur candidat est conservé uniquement
-    # comme information de recherche.
-    # --------------------------------------------------------
-
-    robust_candidates = [
-        r
-        for r in robustness_rows
-        if r.robust
-    ]
-
-    selected = (
-        robust_candidates[0]
-        if robust_candidates
-        else (
-            robustness_rows[0]
-            if robustness_rows
-            else None
-        )
-    )
-
-    holdout = None
-
-    if selected is not None:
-
-        cfg = config_from_robustness(
-            selected
+        tr = inside(
+            tr,
+            start,
+            end,
         )
 
-        holdout = run_holdout(
-            symbol,
-            df,
-            cfg,
+        z = stats(tr)
+
+        out.append(
+            {
+                "scenario": name,
+                "symbol": symbol,
+                "mean": z["mean"],
+                "pf": z["pf"],
+                "win": z["win"],
+                "dd": z["dd"],
+                "n": z["n"],
+                "return": z["ret"],
+            }
         )
 
-    fold_df = pd.DataFrame(
-        [
-            asdict(x)
-            for x in all_fold_results
-        ]
-    )
+    return out
 
-    robustness_df = pd.DataFrame(
-        [
-            asdict(x)
-            for x in robustness_rows
-        ]
-    )
+
+# ============================================================
+# V4.2 ROBUSTNESS
+# ============================================================
+
+def config_key(row):
 
     return (
-        fold_df,
-        robustness_df,
-        holdout,
-        selected,
+        row["signal"],
+        row["regime"],
+        row["profile"],
+        float(row["tp"]),
+        float(row["sl"]),
+        int(row["hold"]),
     )
 
 
-# ============================================================
-# GLOBAL MULTI-ASSET ANALYSIS
-# ============================================================
+def finite_median(series):
 
-def global_analysis(
-    robustness_all: pd.DataFrame,
-) -> pd.DataFrame:
+    x = pd.to_numeric(
+        series,
+        errors="coerce",
+    )
 
-    if robustness_all.empty:
+    x = x[np.isfinite(x)]
+
+    if len(x) == 0:
+        return np.nan
+
+    return float(
+        np.median(x)
+    )
+
+
+def aggregate_robustness(
+    wf: pd.DataFrame,
+):
+
+    if wf.empty:
+        return pd.DataFrame()
+
+    oos = wf[
+        wf["fold"] != "FINAL"
+    ].copy()
+
+    if oos.empty:
+        return pd.DataFrame()
+
+    rows = []
+
+    group_cols = [
+        "symbol",
+        "interval",
+        "signal",
+        "regime",
+        "profile",
+        "tp",
+        "sl",
+        "hold",
+    ]
+
+    for key, g in oos.groupby(
+        group_cols,
+        dropna=False,
+    ):
+
+        # ----------------------------------------------------
+        # n=0 / invalid folds exclus
+        # ----------------------------------------------------
+
+        active = g[
+            g["test_n"].fillna(0)
+            >= MIN_TRAIN_TRADES
+        ].copy()
+
+        if active.empty:
+            continue
+
+        n_folds = len(active)
+
+        total_trades = int(
+            active["test_n"].sum()
+        )
+
+        mean_oos = float(
+            active["test_mean"].mean()
+        )
+
+        median_oos = finite_median(
+            active["test_mean"]
+        )
+
+        std_oos = (
+            float(
+                active["test_mean"].std(
+                    ddof=1
+                )
+            )
+            if len(active) > 1
+            else np.nan
+        )
+
+        if (
+            np.isfinite(std_oos)
+            and std_oos > 0
+        ):
+            t_oos = (
+                mean_oos
+                /
+                (
+                    std_oos
+                    / math.sqrt(n_folds)
+                )
+            )
+        else:
+            t_oos = np.nan
+
+        positive_ratio = float(
+            np.mean(
+                active["test_mean"] > 0
+            )
+        )
+
+        beat_random_ratio = float(
+            np.mean(
+                active["edge_vs_random"] > 0
+            )
+        )
+
+        median_pf = finite_median(
+            active["test_pf"]
+        )
+
+        median_dd = finite_median(
+            active["test_dd"]
+        )
+
+        median_edge = finite_median(
+            active["edge_vs_random"]
+        )
+
+        mean_edge = float(
+            active["edge_vs_random"].mean()
+        )
+
+        # ----------------------------------------------------
+        # Score robuste
+        # ----------------------------------------------------
+
+        stability = (
+            positive_ratio
+            + beat_random_ratio
+        ) / 2
+
+        pf_component = (
+            np.clip(
+                median_pf,
+                0,
+                2,
+            )
+            / 2
+            if np.isfinite(median_pf)
+            else 0
+        )
+
+        edge_component = (
+            np.clip(
+                median_edge,
+                -0.01,
+                0.01,
+            )
+            + 0.01
+        ) / 0.02
+
+        sample_component = min(
+            1.0,
+            total_trades / 200,
+        )
+
+        fold_component = min(
+            1.0,
+            n_folds / 10,
+        )
+
+        # pénalité supplémentaire pour variance OOS
+        if (
+            np.isfinite(std_oos)
+            and std_oos > 0
+        ):
+            consistency = max(
+                0.0,
+                1.0
+                - min(
+                    std_oos / 0.01,
+                    1.0,
+                ),
+            )
+        else:
+            consistency = 0.0
+
+        robustness_score = (
+            0.25 * stability
+            + 0.18 * pf_component
+            + 0.18 * edge_component
+            + 0.12 * sample_component
+            + 0.12 * fold_component
+            + 0.15 * consistency
+        )
+
+        robust = (
+            n_folds
+            >= MIN_ACTIVE_FOLDS
+            and total_trades
+            >= MIN_TOTAL_TRADES
+            and positive_ratio
+            >= MIN_POSITIVE_FOLD_RATIO
+            and beat_random_ratio
+            >= MIN_BEAT_RANDOM_RATIO
+            and np.isfinite(median_pf)
+            and median_pf
+            >= MIN_MEDIAN_PF
+            and np.isfinite(median_edge)
+            and median_edge
+            >= MIN_MEDIAN_EDGE_RANDOM
+        )
+
+        rows.append(
+            {
+                "symbol": key[0],
+                "interval": key[1],
+                "signal": key[2],
+                "regime": key[3],
+                "profile": key[4],
+                "tp": key[5],
+                "sl": key[6],
+                "hold": key[7],
+
+                "active_folds": n_folds,
+                "total_trades": total_trades,
+
+                "mean_oos": mean_oos,
+                "median_oos": median_oos,
+                "std_oos": std_oos,
+                "t_oos": t_oos,
+
+                "positive_fold_ratio": positive_ratio,
+                "beat_random_ratio": beat_random_ratio,
+
+                "median_pf": median_pf,
+                "median_dd": median_dd,
+
+                "mean_edge_random": mean_edge,
+                "median_edge_random": median_edge,
+
+                "robustness_score":
+                    robustness_score,
+
+                "robust": robust,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def global_robustness(
+    robustness: pd.DataFrame,
+):
+
+    if robustness.empty:
         return pd.DataFrame()
 
     group_cols = [
-        "family",
-        "params",
+        "interval",
+        "signal",
         "regime",
         "profile",
+        "tp",
+        "sl",
+        "hold",
     ]
 
     rows = []
 
-    for key, group in robustness_all.groupby(
-        group_cols
+    for key, g in robustness.groupby(
+        group_cols,
+        dropna=False,
     ):
 
         rows.append(
             {
-                "family": key[0],
-                "params": key[1],
+                "interval": key[0],
+                "signal": key[1],
                 "regime": key[2],
                 "profile": key[3],
+                "tp": key[4],
+                "sl": key[5],
+                "hold": key[6],
 
-                "symbols": len(group),
-
-                "mean_oos": group[
-                    "mean_oos"
-                ].mean(),
-
-                "median_oos": group[
-                    "median_oos"
-                ].median(),
-
-                "positive_fold_ratio": group[
-                    "positive_fold_ratio"
-                ].mean(),
-
-                "beat_random_ratio": group[
-                    "beat_random_ratio"
-                ].mean(),
-
-                "median_pf": group[
-                    "median_pf"
-                ].median(),
-
-                "median_edge_random": group[
-                    "median_edge_random"
-                ].median(),
-
-                "total_trades": group[
-                    "total_trades"
-                ].sum(),
+                "symbols": int(
+                    g["symbol"].nunique()
+                ),
 
                 "robust_symbols": int(
-                    group["robust"].sum()
+                    g["robust"].sum()
                 ),
+
+                "total_trades": int(
+                    g["total_trades"].sum()
+                ),
+
+                "mean_oos": float(
+                    g["mean_oos"].mean()
+                ),
+
+                "median_oos": finite_median(
+                    g["median_oos"]
+                ),
+
+                "positive_fold_ratio":
+                    float(
+                        g[
+                            "positive_fold_ratio"
+                        ].mean()
+                    ),
+
+                "beat_random_ratio":
+                    float(
+                        g[
+                            "beat_random_ratio"
+                        ].mean()
+                    ),
+
+                "median_pf":
+                    finite_median(
+                        g["median_pf"]
+                    ),
+
+                "median_edge_random":
+                    finite_median(
+                        g[
+                            "median_edge_random"
+                        ]
+                    ),
             }
         )
 
@@ -1509,13 +1900,25 @@ def global_analysis(
         &
         (result["total_trades"] >= 150)
         &
-        (result["positive_fold_ratio"] >= 0.50)
+        (
+            result["positive_fold_ratio"]
+            >= 0.50
+        )
         &
-        (result["beat_random_ratio"] >= 0.50)
+        (
+            result["beat_random_ratio"]
+            >= 0.50
+        )
         &
-        (result["median_pf"] >= 1.0)
+        (
+            result["median_pf"]
+            >= 1.00
+        )
         &
-        (result["median_edge_random"] >= 0.0)
+        (
+            result["median_edge_random"]
+            >= 0
+        )
     )
 
     result = result.sort_values(
@@ -1534,288 +1937,75 @@ def global_analysis(
 
 
 # ============================================================
-# REPORT
+# FORMAT
 # ============================================================
 
-def write_report(
-    folds_df: pd.DataFrame,
-    robustness_df: pd.DataFrame,
-    global_df: pd.DataFrame,
-    holdouts: list[dict],
-    output: Path,
-):
+def pct(x):
 
-    lines = []
+    if not np.isfinite(x):
+        return "nan"
 
-    lines.append(
-        "# SCALP LAB V4.2 — Robustness Research"
-    )
-
-    lines.append("")
-    lines.append(
-        f"Generated: {datetime.now(timezone.utc).isoformat()}"
-    )
-
-    lines.append("")
-    lines.append(
-        "## Philosophy"
-    )
-
-    lines.append(
-        "V4.2 prioritise la robustesse OOS plutôt "
-        "que le meilleur rendement ponctuel."
-    )
-
-    lines.append("")
-    lines.append(
-        "Une configuration est dite robuste seulement "
-        "si elle satisfait simultanément les seuils "
-        "fixés avant la recherche."
-    )
-
-    lines.append("")
-    lines.append(
-        "## Seuils de robustesse"
-    )
-
-    lines.append(
-        f"- folds actifs minimum: {MIN_ACTIVE_FOLDS}"
-    )
-
-    lines.append(
-        f"- trades cumulés minimum: {MIN_TOTAL_TRADES}"
-    )
-
-    lines.append(
-        f"- folds positifs minimum: "
-        f"{MIN_POSITIVE_FOLD_RATIO:.0%}"
-    )
-
-    lines.append(
-        f"- folds > random minimum: "
-        f"{MIN_BEAT_RANDOM_RATIO:.0%}"
-    )
-
-    lines.append(
-        f"- médiane PF minimum: "
-        f"{MIN_MEDIAN_PF:.2f}"
-    )
-
-    lines.append(
-        f"- médiane edge/random minimum: "
-        f"{MIN_MEDIAN_EDGE_RANDOM:.4%}"
-    )
-
-    lines.append("")
-    lines.append(
-        "## Résumé par actif"
-    )
-
-    for symbol, group in robustness_df.groupby(
-        "symbol"
-    ):
-
-        robust = group[
-            group["robust"]
-        ]
-
-        lines.append("")
-        lines.append(
-            f"### {symbol}"
-        )
-
-        lines.append(
-            f"- configurations: {len(group)}"
-        )
-
-        lines.append(
-            f"- configurations robustes: {len(robust)}"
-        )
-
-        if not robust.empty:
-
-            r = robust.iloc[0]
-
-            lines.append(
-                f"- meilleure configuration robuste: "
-                f"{r['family']} {r['params']} "
-                f"regime={r['regime']}"
-            )
-
-            lines.append(
-                f"- mean OOS: {r['mean_oos']:.4%}"
-            )
-
-            lines.append(
-                f"- median OOS: {r['median_oos']:.4%}"
-            )
-
-            lines.append(
-                f"- PF médiane: {r['median_pf']:.2f}"
-            )
-
-            lines.append(
-                f"- edge/random médian: "
-                f"{r['median_edge_random']:.4%}"
-            )
-
-            lines.append(
-                f"- trades: {int(r['total_trades'])}"
-            )
-
-        else:
-
-            lines.append(
-                "Aucune configuration ne satisfait "
-                "tous les critères de robustesse."
-            )
-
-    lines.append("")
-    lines.append(
-        "## Analyse globale multi-actifs"
-    )
-
-    if global_df.empty:
-
-        lines.append(
-            "Aucune donnée globale."
-        )
-
-    else:
-
-        for _, row in global_df.head(10).iterrows():
-
-            lines.append(
-                f"- {row['family']} "
-                f"{row['params']} "
-                f"regime={row['regime']} | "
-                f"symbols={int(row['symbols'])} | "
-                f"robust_symbols="
-                f"{int(row['robust_symbols'])} | "
-                f"trades="
-                f"{int(row['total_trades'])} | "
-                f"PF="
-                f"{row['median_pf']:.2f} | "
-                f"edge="
-                f"{row['median_edge_random']:.4%} | "
-                f"global_robust="
-                f"{bool(row['global_robust'])}"
-            )
-
-    lines.append("")
-    lines.append(
-        "## Final holdout"
-    )
-
-    for h in holdouts:
-
-        lines.append("")
-
-        lines.append(
-            f"### {h['symbol']}"
-        )
-
-        lines.append(
-            f"- strategy: "
-            f"{h['family']} "
-            f"{h['params']} "
-            f"regime={h['regime']}"
-        )
-
-        lines.append(
-            f"- return: "
-            f"{h['holdout_return']:.4%}"
-        )
-
-        lines.append(
-            f"- PF: "
-            f"{h['pf']:.2f}"
-        )
-
-        lines.append(
-            f"- DD: "
-            f"{h['dd']:.4%}"
-        )
-
-        lines.append(
-            f"- trades: "
-            f"{h['trades']}"
-        )
-
-        lines.append(
-            f"- t-stat: "
-            f"{h['t_stat']:.2f}"
-        )
-
-    lines.append("")
-    lines.append(
-        "## Interpretation"
-    )
-
-    lines.append(
-        "Une absence de configuration robuste est "
-        "un résultat valide de la recherche."
-    )
-
-    lines.append(
-        "V4.2 ne transforme pas automatiquement "
-        "une configuration positive en stratégie "
-        "déployable."
-    )
-
-    output.write_text(
-        "\n".join(lines),
-        encoding="utf-8",
-    )
+    return f"{x * 100:+.4f}%"
 
 
 # ============================================================
-# CLI
+# MAIN
 # ============================================================
 
-def parse_args():
+def main():
 
-    parser = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser()
 
-    parser.add_argument(
+    ap.add_argument(
         "--symbols",
         default="BTCUSDT,ETHUSDT,SOLUSDT",
     )
 
-    parser.add_argument(
+    ap.add_argument(
         "--intervals",
-        default="1h",
+        default="5m,15m",
     )
 
-    parser.add_argument(
+    ap.add_argument(
         "--days",
         type=int,
         default=730,
     )
 
-    parser.add_argument(
+    ap.add_argument(
         "--capital",
         type=float,
-        default=100,
+        default=DEFAULT_CAPITAL,
     )
 
-    parser.add_argument(
+    ap.add_argument(
         "--mc-runs",
         type=int,
-        default=5000,
+        default=MC_RUNS,
     )
 
-    return parser.parse_args()
+    args = ap.parse_args()
 
+    t0 = time.time()
 
-def main():
-
-    args = parse_args()
-
-    RESULTS_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
+    outdir = Path("results")
+    outdir.mkdir(
+        exist_ok=True
     )
+
+    for f in (
+        "walk_forward_v42.csv",
+        "robustness_v42.csv",
+        "global_v42.csv",
+        "stress_test_v42.csv",
+        "holdout_v42.csv",
+        "summary_v42.md",
+    ):
+
+        p = outdir / f
+
+        if p.exists():
+            p.unlink()
 
     symbols = [
         x.strip()
@@ -1829,181 +2019,992 @@ def main():
         if x.strip()
     ]
 
-    print()
-    print("# SCALP LAB V4.2")
-    print(
-        "Robustness-first walk-forward research"
+    end_ms = int(
+        time.time() * 1000
     )
-    print(
-        "OHLCV only | Binance | 1h"
+
+    start_ms = (
+        end_ms
+        - args.days * 86_400_000
     )
-    print(
-        f"WF={WF_TRAIN_DAYS}j/"
-        f"{WF_TEST_DAYS}j/"
+
+    rows = []
+    stresses = []
+    holdouts = []
+    log = []
+
+    def say(s):
+
+        print(s)
+        log.append(s)
+
+    say("# SCALP LAB V4.2")
+
+    say(
+        "Binance USD-M | "
+        "signal clôturé -> entrée suivante | "
+        "contexte 1h"
+    )
+
+    say(
+        f"WF={TRAIN_DAYS}j/"
+        f"{TEST_DAYS}j/"
+        f"{STEP_DAYS}j | "
+        f"FINAL HOLDOUT="
         f"{FINAL_HOLDOUT_DAYS}j"
     )
-    print(
-        f"Fees maker={MAKER_FEE:.2%} "
-        f"taker={TAKER_FEE:.2%}"
-    )
-    print(
-        f"Robustness: "
-        f"{MIN_ACTIVE_FOLDS} folds / "
-        f"{MIN_TOTAL_TRADES} trades / "
-        f"{MIN_POSITIVE_FOLD_RATIO:.0%} positive / "
-        f"{MIN_BEAT_RANDOM_RATIO:.0%} > random"
+
+    say(
+        f"Coûts taker={FEE_TAKER:.2%} | "
+        f"maker={FEE_MAKER:.2%} | "
+        f"candidats={len(SIGNALS)}"
     )
 
-    all_folds = []
-    all_robustness = []
-    holdouts = []
+    say(
+        "ROBUSTNESS | "
+        f"folds>={MIN_ACTIVE_FOLDS} | "
+        f"trades>={MIN_TOTAL_TRADES} | "
+        f"positive>={MIN_POSITIVE_FOLD_RATIO:.0%} | "
+        f">random>={MIN_BEAT_RANDOM_RATIO:.0%} | "
+        f"PF>={MIN_MEDIAN_PF:.2f}"
+    )
 
-    for symbol in symbols:
+    say("")
 
-        for interval in intervals:
+    for interval in intervals:
 
-            (
-                folds_df,
-                robustness_df,
-                holdout,
-                selected,
-            ) = run_symbol(
-                symbol,
-                interval,
-                args.days,
+        for symbol in symbols:
+
+            t_pair = time.time()
+
+            ctx_iv = (
+                CONTEXT_ENTRY_TO_CTX.get(
+                    interval,
+                    "1h",
+                )
             )
 
-            all_folds.append(
-                folds_df
+            warmup_days = (
+                CONTEXT_WARMUP_DAYS.get(
+                    ctx_iv,
+                    12,
+                )
             )
 
-            all_robustness.append(
-                robustness_df
+            min_ctx_len = (
+                CONTEXT_MIN_LEN.get(
+                    ctx_iv,
+                    200,
+                )
             )
 
-            if holdout is not None:
-                holdouts.append(
-                    holdout
+            min_entry_candles = int(
+                (
+                    TRAIN_DAYS
+                    + TEST_DAYS
+                    + FINAL_HOLDOUT_DAYS
+                )
+                * 86_400_000
+                / INTERVAL_MS[interval]
+                * 0.5
+            )
+
+            entry = to_frame(
+                fetch_vision(
+                    symbol,
+                    interval,
+                    start_ms,
+                    end_ms,
+                )
+            )
+
+            h1 = to_frame(
+                fetch_vision(
+                    symbol,
+                    ctx_iv,
+                    start_ms
+                    - warmup_days
+                    * 86_400_000,
+                    end_ms,
+                )
+            )
+
+            if (
+                len(entry)
+                < min_entry_candles
+                or len(h1)
+                < min_ctx_len
+            ):
+
+                say(
+                    f"{symbol} {interval} | "
+                    f"données insuffisantes "
+                    f"({len(entry)} entrée, "
+                    f"{len(h1)} contexte)"
                 )
 
-    folds_df = pd.concat(
-        all_folds,
-        ignore_index=True,
+                continue
+
+            entry = entry[
+                entry.time >= start_ms
+            ].reset_index(
+                drop=True
+            )
+
+            folds, holdout_start = (
+                make_folds(
+                    len(entry),
+                    interval,
+                )
+            )
+
+            ef, candidates = (
+                make_candidates(
+                    entry,
+                    h1,
+                    ctx_iv,
+                )
+            )
+
+            L = ef
+
+            say(
+                f"{symbol} {interval} | "
+                f"{len(entry)} candles | "
+                f"{len(candidates)} candidats | "
+                f"{len(folds)} folds | "
+                f"holdout={FINAL_HOLDOUT_DAYS}j"
+            )
+
+            # ------------------------------------------------
+            # WALK FORWARD
+            # ------------------------------------------------
+
+            for fi, (
+                tr0,
+                tr1,
+                te0,
+                te1,
+            ) in enumerate(
+                folds,
+                1,
+            ):
+
+                best = None
+
+                for ci, cand in enumerate(
+                    candidates
+                ):
+
+                    for tp, sl, hold in EXITS:
+
+                        for profile in PROFILES:
+
+                            all_trades = simulate(
+                                L,
+                                cand.signal,
+                                tp,
+                                sl,
+                                hold,
+                                profile,
+                                SLIP.get(
+                                    symbol,
+                                    DEFAULT_SLIP,
+                                ),
+                            )
+
+                            train = inside(
+                                all_trades,
+                                tr0,
+                                tr1,
+                            )
+
+                            st = stats(train)
+
+                            sc = score(st)
+
+                            if (
+                                best is None
+                                or sc
+                                > best["score"]
+                            ):
+
+                                best = {
+                                    "candidate_i": ci,
+                                    "candidate": cand,
+                                    "tp": tp,
+                                    "sl": sl,
+                                    "hold": hold,
+                                    "profile": profile,
+                                    "score": sc,
+                                    "train": st,
+                                }
+
+                if best is None:
+                    continue
+
+                test_trades = inside(
+                    simulate(
+                        L,
+                        best["candidate"].signal,
+                        best["tp"],
+                        best["sl"],
+                        best["hold"],
+                        best["profile"],
+                        SLIP.get(
+                            symbol,
+                            DEFAULT_SLIP,
+                        ),
+                    ),
+                    te0,
+                    te1,
+                )
+
+                ts = stats(
+                    test_trades
+                )
+
+                mc = monte_carlo(
+                    test_trades,
+                    args.capital,
+                    args.mc_runs,
+                    MC_SEED + fi,
+                )
+
+                bench = benchmark_fixed(
+                    L,
+                    te0,
+                    te1,
+                )
+
+                bs = stats(bench)
+
+                bh = benchmark_buy_hold(
+                    L,
+                    te0,
+                    te1,
+                )
+
+                bhs = stats(bh)
+
+                rs = (
+                    benchmark_random_side_mc(
+                        L,
+                        best[
+                            "candidate"
+                        ].signal,
+                        best["tp"],
+                        best["sl"],
+                        best["hold"],
+                        best["profile"],
+                        SLIP.get(
+                            symbol,
+                            DEFAULT_SLIP,
+                        ),
+                        te0,
+                        te1,
+                        seed=(
+                            MC_SEED
+                            + fi * 1000
+                        ),
+                        runs=RANDOM_SIDE_RUNS,
+                    )
+                )
+
+                spec = {
+                    "tp": best["tp"],
+                    "sl": best["sl"],
+                    "hold": best["hold"],
+                    "profile": best["profile"],
+                }
+
+                stress_rows = stress(
+                    L,
+                    best["candidate"],
+                    spec,
+                    te0,
+                    te1,
+                    symbol,
+                )
+
+                stresses.extend(
+                    [
+                        {
+                            **x,
+                            "interval": interval,
+                            "fold": fi,
+                        }
+                        for x in stress_rows
+                    ]
+                )
+
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "interval": interval,
+                        "fold": fi,
+                        "candidate":
+                            best["candidate_i"],
+                        "signal":
+                            best["candidate"].name,
+                        "regime":
+                            best["candidate"].regime,
+                        "profile":
+                            best["profile"],
+                        "tp":
+                            best["tp"],
+                        "sl":
+                            best["sl"],
+                        "hold":
+                            best["hold"],
+
+                        "train_n":
+                            best["train"]["n"],
+                        "train_mean":
+                            best["train"]["mean"],
+                        "train_pf":
+                            best["train"]["pf"],
+
+                        "test_n":
+                            ts["n"],
+                        "test_gross":
+                            ts["gross"],
+                        "test_mean":
+                            ts["mean"],
+                        "test_se":
+                            ts["se"],
+                        "test_t":
+                            ts["t"],
+                        "test_fees":
+                            ts["fees"],
+                        "test_win":
+                            ts["win"],
+                        "test_pf":
+                            ts["pf"],
+                        "test_median":
+                            ts["median"],
+                        "test_p25":
+                            ts["p25"],
+                        "test_p75":
+                            ts["p75"],
+                        "test_dd":
+                            ts["dd"],
+                        "test_return":
+                            ts["ret"],
+
+                        "mc_median":
+                            mc["median"],
+                        "mc_p05":
+                            mc["p05"],
+                        "mc_p95":
+                            mc["p95"],
+                        "mc_dd":
+                            mc["dd"],
+
+                        "bench_fixed_mean":
+                            bs["mean"],
+                        "bench_fixed_pf":
+                            bs["pf"],
+
+                        "bench_random_mean":
+                            rs["mean"],
+                        "bench_random_se":
+                            rs["se"],
+                        "bench_random_p05":
+                            rs["p05"],
+                        "bench_random_p95":
+                            rs["p95"],
+                        "bench_random_n":
+                            rs["n"],
+
+                        "edge_vs_random":
+                            ts["mean"]
+                            - rs["mean"],
+
+                        "bench_bh_return":
+                            bhs["ret"],
+                    }
+                )
+
+                say(
+                    f"  F{fi} "
+                    f"{best['candidate'].name} / "
+                    f"{best['candidate'].regime} / "
+                    f"{best['profile']} | "
+                    f"TEST {pct(ts['mean'])} "
+                    f"(t={ts['t']:.1f}) | "
+                    f"hasard100 "
+                    f"{pct(rs['mean'])} | "
+                    f"delta "
+                    f"{pct(ts['mean'] - rs['mean'])} | "
+                    f"PF={ts['pf']:.2f} | "
+                    f"DD={pct(ts['dd'])} | "
+                    f"n={ts['n']}"
+                )
+
+            # ------------------------------------------------
+            # HOLDOUT
+            # ------------------------------------------------
+            #
+            # Important :
+            # le holdout n'est PAS utilisé pour la robustesse.
+            #
+            # La configuration finale est déterminée à partir
+            # des configurations réellement sélectionnées dans
+            # les folds OOS.
+            # ------------------------------------------------
+
+            pair_rows = [
+                x
+                for x in rows
+                if (
+                    x["symbol"] == symbol
+                    and x["interval"] == interval
+                )
+            ]
+
+            if (
+                holdout_start
+                < len(entry)
+                and pair_rows
+            ):
+
+                counts = Counter(
+                    config_key(x)
+                    for x in pair_rows
+                )
+
+                chosen_key = counts.most_common(
+                    1
+                )[0][0]
+
+                match = next(
+                    x
+                    for x in pair_rows
+                    if config_key(x)
+                    == chosen_key
+                )
+
+                cand = candidates[
+                    match["candidate"]
+                ]
+
+                hold_trades = inside(
+                    simulate(
+                        L,
+                        cand.signal,
+                        match["tp"],
+                        match["sl"],
+                        match["hold"],
+                        match["profile"],
+                        SLIP.get(
+                            symbol,
+                            DEFAULT_SLIP,
+                        ),
+                    ),
+                    holdout_start,
+                    len(entry),
+                )
+
+                hs = stats(
+                    hold_trades
+                )
+
+                hmc = monte_carlo(
+                    hold_trades,
+                    args.capital,
+                    args.mc_runs,
+                    MC_SEED + 999,
+                )
+
+                holdout_row = {
+                    "symbol": symbol,
+                    "interval": interval,
+                    "signal": match["signal"],
+                    "regime": match["regime"],
+                    "profile": match["profile"],
+                    "tp": match["tp"],
+                    "sl": match["sl"],
+                    "hold": match["hold"],
+                    "holdout_days":
+                        FINAL_HOLDOUT_DAYS,
+                    "holdout_n":
+                        hs["n"],
+                    "holdout_mean":
+                        hs["mean"],
+                    "holdout_t":
+                        hs["t"],
+                    "holdout_pf":
+                        hs["pf"],
+                    "holdout_dd":
+                        hs["dd"],
+                    "holdout_return":
+                        hs["ret"],
+                    "mc_median":
+                        hmc["median"],
+                    "mc_p05":
+                        hmc["p05"],
+                    "mc_p95":
+                        hmc["p95"],
+                    "mc_dd":
+                        hmc["dd"],
+                }
+
+                holdouts.append(
+                    holdout_row
+                )
+
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "interval": interval,
+                        "fold": "FINAL",
+                        "candidate":
+                            match["candidate"],
+                        "signal":
+                            match["signal"],
+                        "regime":
+                            match["regime"],
+                        "profile":
+                            match["profile"],
+                        "tp":
+                            match["tp"],
+                        "sl":
+                            match["sl"],
+                        "hold":
+                            match["hold"],
+                        "train_n":
+                            np.nan,
+                        "train_mean":
+                            np.nan,
+                        "train_pf":
+                            np.nan,
+                        "test_n":
+                            hs["n"],
+                        "test_gross":
+                            hs["gross"],
+                        "test_mean":
+                            hs["mean"],
+                        "test_se":
+                            hs["se"],
+                        "test_t":
+                            hs["t"],
+                        "test_fees":
+                            hs["fees"],
+                        "test_win":
+                            hs["win"],
+                        "test_pf":
+                            hs["pf"],
+                        "test_median":
+                            hs["median"],
+                        "test_p25":
+                            hs["p25"],
+                        "test_p75":
+                            hs["p75"],
+                        "test_dd":
+                            hs["dd"],
+                        "test_return":
+                            hs["ret"],
+                        "mc_median":
+                            hmc["median"],
+                        "mc_p05":
+                            hmc["p05"],
+                        "mc_p95":
+                            hmc["p95"],
+                        "mc_dd":
+                            hmc["dd"],
+                        "bench_fixed_mean":
+                            np.nan,
+                        "bench_fixed_pf":
+                            np.nan,
+                        "bench_random_mean":
+                            np.nan,
+                        "bench_random_se":
+                            np.nan,
+                        "bench_random_p05":
+                            np.nan,
+                        "bench_random_p95":
+                            np.nan,
+                        "bench_random_n":
+                            np.nan,
+                        "edge_vs_random":
+                            np.nan,
+                        "bench_bh_return":
+                            np.nan,
+                    }
+                )
+
+                say(
+                    f"  FINAL HOLDOUT "
+                    f"{FINAL_HOLDOUT_DAYS}j | "
+                    f"{match['signal']} | "
+                    f"{match['profile']} | "
+                    f"{pct(hs['mean'])} "
+                    f"(t={hs['t']:.1f}) | "
+                    f"PF={hs['pf']:.2f} | "
+                    f"DD={pct(hs['dd'])} | "
+                    f"n={hs['n']}"
+                )
+
+            say(
+                f"  -> {symbol} {interval} "
+                f"terminé en "
+                f"{(time.time() - t_pair) / 60:.1f} min"
+            )
+
+    # ========================================================
+    # DATAFRAMES
+    # ========================================================
+
+    wf = pd.DataFrame(
+        rows
     )
 
-    robustness_df = pd.concat(
-        all_robustness,
-        ignore_index=True,
+    st = pd.DataFrame(
+        stresses
     )
 
-    global_df = global_analysis(
-        robustness_df
-    )
+    if wf.empty:
+        robustness = pd.DataFrame()
+        global_df = pd.DataFrame()
+    else:
+        robustness = aggregate_robustness(
+            wf
+        )
 
-    folds_path = (
-        RESULTS_DIR
-        / "walk_forward_v42.csv"
-    )
+        global_df = global_robustness(
+            robustness
+        )
 
-    robustness_path = (
-        RESULTS_DIR
-        / "robustness_v42.csv"
-    )
-
-    global_path = (
-        RESULTS_DIR
-        / "global_v42.csv"
-    )
-
-    holdout_path = (
-        RESULTS_DIR
-        / "holdout_v42.csv"
-    )
-
-    folds_df.to_csv(
-        folds_path,
+    wf.to_csv(
+        outdir / "walk_forward_v42.csv",
         index=False,
     )
 
-    robustness_df.to_csv(
-        robustness_path,
+    st.to_csv(
+        outdir / "stress_test_v42.csv",
+        index=False,
+    )
+
+    robustness.to_csv(
+        outdir / "robustness_v42.csv",
         index=False,
     )
 
     global_df.to_csv(
-        global_path,
+        outdir / "global_v42.csv",
         index=False,
     )
 
     pd.DataFrame(
         holdouts
     ).to_csv(
-        holdout_path,
+        outdir / "holdout_v42.csv",
         index=False,
     )
 
-    report_path = (
-        RESULTS_DIR
-        / "summary_v42.md"
+    # ========================================================
+    # REPORT
+    # ========================================================
+
+    report = [
+        "# SCALP LAB V4.2 — rapport de recherche",
+        "",
+        "## Configuration",
+        "",
+        "- Binance Futures USD-M",
+        "- OHLCV uniquement",
+        f"- TRAIN : {TRAIN_DAYS} jours",
+        f"- TEST : {TEST_DAYS} jours",
+        f"- STEP : {STEP_DAYS} jours",
+        f"- FINAL HOLDOUT : {FINAL_HOLDOUT_DAYS} jours",
+        f"- Frais taker : {FEE_TAKER:.2%}/côté",
+        f"- Frais maker : {FEE_MAKER:.2%}/côté",
+        "",
+        "## Critères de robustesse",
+        "",
+        f"- folds actifs minimum : {MIN_ACTIVE_FOLDS}",
+        f"- trades cumulés minimum : {MIN_TOTAL_TRADES}",
+        f"- folds positifs minimum : {MIN_POSITIVE_FOLD_RATIO:.0%}",
+        f"- folds > hasard minimum : {MIN_BEAT_RANDOM_RATIO:.0%}",
+        f"- PF médian minimum : {MIN_MEDIAN_PF:.2f}",
+        f"- edge médian vs hasard minimum : {MIN_MEDIAN_EDGE_RANDOM:.4%}",
+        "",
+        "Une configuration n'est dite ROBUSTE que si "
+        "tous les critères sont satisfaits.",
+        "",
+        "## Walk-forward OOS",
+        "",
+    ]
+
+    valid = (
+        wf[wf["fold"] != "FINAL"]
+        if not wf.empty
+        else wf
     )
 
-    write_report(
-        folds_df,
-        robustness_df,
-        global_df,
-        holdouts,
-        report_path,
-    )
+    if not valid.empty:
 
-    print()
-    print("=" * 72)
-    print("RESEARCH TERMINÉE")
-    print("=" * 72)
+        for interval in intervals:
 
-    print(
-        f"Walk-forward : {folds_path}"
-    )
+            x = valid[
+                valid.interval == interval
+            ]
 
-    print(
-        f"Robustness   : {robustness_path}"
-    )
+            if x.empty:
+                continue
 
-    print(
-        f"Global       : {global_path}"
-    )
+            report += [
+                f"### {interval}",
+                "",
+                "| mesure | valeur |",
+                "|---|---:|",
+                f"| folds | {len(x)} |",
+                f"| test mean/trade | "
+                f"{pct(x.test_mean.mean())} |",
+                f"| folds positifs | "
+                f"{int((x.test_mean > 0).sum())}/{len(x)} |",
+                f"| PF médian | "
+                f"{x.test_pf.median():.2f} |",
+                f"| DD médian | "
+                f"{pct(x.test_dd.median())} |",
+                f"| médiane trade | "
+                f"{pct(x.test_median.median())} |",
+                f"| hasard moyen | "
+                f"{pct(x.bench_random_mean.mean())} |",
+                f"| edge moyen vs hasard | "
+                f"{pct(x.edge_vs_random.mean())} |",
+                f"| folds > hasard | "
+                f"{int((x.edge_vs_random > 0).sum())}/{len(x)} |",
+                "",
+            ]
 
-    print(
-        f"Holdout      : {holdout_path}"
-    )
+    report += [
+        "## Configurations robustes",
+        "",
+    ]
 
-    print(
-        f"Report       : {report_path}"
-    )
+    if robustness.empty:
 
-    print()
-
-    robust_count = int(
-        robustness_df["robust"].sum()
-    )
-
-    print(
-        f"Configurations robustes : "
-        f"{robust_count}"
-    )
-
-    if robust_count == 0:
-
-        print()
-        print(
-            "IMPORTANT : aucune configuration "
-            "ne satisfait les critères de robustesse."
+        report.append(
+            "Aucune configuration candidate."
         )
 
-        print(
-            "Cela constitue un résultat de recherche "
-            "valide et ne doit pas être contourné "
-            "en abaissant les seuils après observation."
+    else:
+
+        robust = robustness[
+            robustness["robust"]
+        ].sort_values(
+            [
+                "robustness_score",
+                "median_edge_random",
+                "median_pf",
+            ],
+            ascending=False,
         )
+
+        report += [
+            "| actif | intervalle | signal | régime | "
+            "profil | folds | trades | mean OOS | "
+            "PF médian | edge médian | score |",
+            "|---|---|---|---|---|---:|---:|---:|---:|---:|---:|",
+        ]
+
+        if robust.empty:
+
+            report.append(
+                "| — | — | Aucune configuration ne satisfait les critères | "
+                "— | — | — | — | — | — | — | — |"
+            )
+
+        else:
+
+            for _, r in robust.head(30).iterrows():
+
+                report.append(
+                    f"| {r.symbol} | "
+                    f"{r.interval} | "
+                    f"{r.signal} | "
+                    f"{r.regime} | "
+                    f"{r.profile} | "
+                    f"{int(r.active_folds)} | "
+                    f"{int(r.total_trades)} | "
+                    f"{pct(r.mean_oos)} | "
+                    f"{r.median_pf:.2f} | "
+                    f"{pct(r.median_edge_random)} | "
+                    f"{r.robustness_score:.3f} |"
+                )
+
+    report += [
+        "",
+        "## Analyse globale multi-actifs",
+        "",
+    ]
+
+    if global_df.empty:
+
+        report.append(
+            "Aucune donnée globale."
+        )
+
+    else:
+
+        report += [
+            "| intervalle | signal | régime | profil | "
+            "actifs | actifs robustes | trades | "
+            "PF médian | edge médian | global robuste |",
+            "|---|---|---|---|---:|---:|---:|---:|---:|---|",
+        ]
+
+        for _, r in global_df.head(30).iterrows():
+
+            report.append(
+                f"| {r.interval} | "
+                f"{r.signal} | "
+                f"{r.regime} | "
+                f"{r.profile} | "
+                f"{r.symbols} | "
+                f"{r.robust_symbols} | "
+                f"{r.total_trades} | "
+                f"{r.median_pf:.2f} | "
+                f"{pct(r.median_edge_random)} | "
+                f"{r.global_robust} |"
+            )
+
+    report += [
+        "",
+        "## Final holdout",
+        "",
+        "| actif | intervalle | signal | mean | t | PF | DD | n | return |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|",
+    ]
+
+    for h in holdouts:
+
+        report.append(
+            f"| {h['symbol']} | "
+            f"{h['interval']} | "
+            f"{h['signal']} | "
+            f"{pct(h['holdout_mean'])} | "
+            f"{h['holdout_t']:.1f} | "
+            f"{h['holdout_pf']:.2f} | "
+            f"{pct(h['holdout_dd'])} | "
+            f"{h['holdout_n']} | "
+            f"{pct(h['holdout_return'])} |"
+        )
+
+    report += [
+        "",
+        "## Robustesse des coûts",
+        "",
+    ]
+
+    if not st.empty:
+
+        g = (
+            st.groupby("scenario")
+            .agg(
+                mean=("mean", "mean"),
+                pf=("pf", "median"),
+                dd=("dd", "median"),
+            )
+            .reset_index()
+        )
+
+        report += [
+            "| scénario | mean/trade | PF médian | DD médian |",
+            "|---|---:|---:|---:|",
+        ]
+
+        for _, r in g.iterrows():
+
+            report.append(
+                f"| {r.scenario} | "
+                f"{pct(r['mean'])} | "
+                f"{r.pf:.2f} | "
+                f"{pct(r.dd)} |"
+            )
+
+    report += [
+        "",
+        "## Limites",
+        "",
+        "- OHLCV uniquement.",
+        "- Pas de carnet d'ordres.",
+        "- Pas de funding.",
+        "- Pas de latence réseau réelle.",
+        "- Ambiguïté intrabougie TP/SL : priorité SL.",
+        "- Exécution maker approximée.",
+        "- Monte-Carlo basé sur les trades observés.",
+        "- Le final holdout n'est pas utilisé pour le filtre de robustesse.",
+        "- Une configuration avec trop peu de trades est exclue.",
+        "",
+        "## Règle d'interprétation",
+        "",
+        "Une absence de configuration robuste constitue un résultat "
+        "valide de la recherche. Les seuils ne doivent pas être abaissés "
+        "après observation des résultats uniquement pour faire apparaître "
+        "une configuration positive.",
+    ]
+
+    (outdir / "summary_v42.md").write_text(
+        "\n".join(report) + "\n",
+        encoding="utf-8",
+    )
+
+    # ========================================================
+    # CONSOLE
+    # ========================================================
+
+    print("")
+    print("=" * 72)
+    print("SCALP LAB V4.2 TERMINÉ")
+    print("=" * 72)
+
+    print(
+        f"Durée : "
+        f"{(time.time() - t0) / 60:.1f} min"
+    )
+
+    print(
+        f"Folds OOS : "
+        f"{len(valid)}"
+    )
+
+    if not robustness.empty:
+
+        print(
+            "Configurations robustes : "
+            f"{int(robustness['robust'].sum())}"
+        )
+
+    else:
+
+        print(
+            "Configurations robustes : 0"
+        )
+
+    print("")
+    print(
+        "results/summary_v42.md"
+    )
+    print(
+        "results/walk_forward_v42.csv"
+    )
+    print(
+        "results/robustness_v42.csv"
+    )
+    print(
+        "results/global_v42.csv"
+    )
+    print(
+        "results/holdout_v42.csv"
+    )
+    print(
+        "results/stress_test_v42.csv"
+    )
+
+    print("=" * 72)
 
 
 if __name__ == "__main__":
