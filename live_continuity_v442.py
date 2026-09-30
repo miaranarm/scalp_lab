@@ -5,114 +5,97 @@ from datetime import datetime,timezone
 STATE=Path("state/live_v4386.json")
 S="SOLUSDT"; H=3600
 WS="wss://fstream.binance.com/ws/solusdt@trade"
+RUN=570
 
 def iso(t):
     return datetime.fromtimestamp(t,timezone.utc).isoformat()
 
 def ts(c):
     v=c.get("time") or c.get("timestamp")
-    if isinstance(v,(int,float)):return int(v)//1000
+    if isinstance(v,(int,float)): return int(v)//1000
     return int(datetime.fromisoformat(str(v).replace("Z","+00:00")).timestamp())
 
 st=json.loads(STATE.read_text())
-raw=st.get("candles",[])
-
 cand={}
-for c in raw:
-    if not isinstance(c,dict):continue
+
+for c in st.get("candles",[]):
     try:
-        t=ts(c); c=dict(c); c["time"]=iso(t); cand[t]=c
-    except:pass
+        t=ts(c)
+        c=dict(c); c["time"]=iso(t)
+        cand[t]=c
+    except: pass
 
-trades={}
+bars={}
 start=time.time()
-last=0
-
-def add(msg):
-    global last
-
-    p=float(msg["p"])
-    q=float(msg["q"])
-    t=int(msg["T"])//1000
-    b=(t//H)*H
-
-    if b not in trades:
-        trades[b]={
-            "time":iso(b),"open":p,"high":p,
-            "low":p,"close":p,"volume":q,
-            "trades":1,"closed":False
-        }
-    else:
-        x=trades[b]
-        x["high"]=max(x["high"],p)
-        x["low"]=min(x["low"],p)
-        x["close"]=p
-        x["volume"]+=q
-        x["trades"]+=1
-
-    last=t
-
-def on_open(ws):
-    print("WS CONNECT | OK")
-
-def on_message(ws,msg):
-    try:add(json.loads(msg))
-    except Exception as e:print("BAD",e)
-
-def on_error(ws,e):
-    print("WS ERROR",e)
-
-def on_close(ws,*a):
-    print("WS CLOSE")
+n=0
 
 print("V442 | CONTINUITY REPAIR")
 print("START",datetime.now(timezone.utc).isoformat())
 
-ws=websocket.WebSocketApp(
-    WS,on_open=on_open,
-    on_message=on_message,
-    on_error=on_error,
-    on_close=on_close
-)
+try:
+    ws=websocket.create_connection(
+        WS,
+        timeout=10,
+        sslopt={"cert_reqs":ssl.CERT_REQUIRED}
+    )
+    print("WS CONNECT | OK")
 
-# 10 minutes maximum
-while time.time()-start<600:
-    try:
-        ws.run_forever(
-            sslopt={"cert_reqs":ssl.CERT_REQUIRED},
-            ping_interval=20,
-            ping_timeout=10
-        )
-    except Exception as e:
-        print("RECONNECT",e)
-    if time.time()-start<600:
-        time.sleep(2)
+    while time.time()-start<RUN:
+        try:
+            raw=ws.recv()
+            if not raw: continue
 
-# Close completed hours only.
+            m=json.loads(raw)
+            p=float(m["p"])
+            q=float(m["q"])
+            t=int(m["T"])//1000
+            b=(t//H)*H
+
+            if b not in bars:
+                bars[b]={
+                    "time":iso(b),
+                    "open":p,"high":p,"low":p,
+                    "close":p,"volume":q,
+                    "trades":1,"closed":False
+                }
+            else:
+                x=bars[b]
+                x["high"]=max(x["high"],p)
+                x["low"]=min(x["low"],p)
+                x["close"]=p
+                x["volume"]+=q
+                x["trades"]+=1
+
+            n+=1
+
+        except websocket.WebSocketTimeoutException:
+            print("PING |",round(time.time()-start))
+        except Exception as e:
+            print("WS ERROR |",e)
+            break
+
+    ws.close()
+
+except Exception as e:
+    print("CONNECT ERROR |",e)
+
 now=int(time.time())
 current=(now//H)*H
-
 added=0
 
-for b,x in sorted(trades.items()):
-    if b>=current:continue
+for b,x in bars.items():
+    if b<current:
+        x["closed"]=True
+        if b not in cand:
+            cand[b]=x
+            added+=1
 
-    x["closed"]=True
-
-    # WebSocket reconstruction is only used
-    # when the candle is absent.
-    if b not in cand:
-        cand[b]=x
-        added+=1
-
-# Preserve existing open candles and sort.
-st["candles"]=[
-    cand[t] for t in sorted(cand)
-]
+ordered=sorted(cand)
+st["candles"]=[cand[t] for t in ordered]
 
 closed=sorted(
-    t for t,c in cand.items()
-    if c.get("closed",True) and t<current
+    t for t in ordered
+    if cand[t].get("closed",True) and t<current
 )
 
 if closed:
@@ -124,12 +107,10 @@ if closed:
         ))
     )
 
-STATE.write_text(
-    json.dumps(st,indent=2)+"\n"
-)
+STATE.write_text(json.dumps(st,indent=2)+"\n")
 
-print("TRADES",sum(x["trades"] for x in trades.values()))
-print("WS HOURS",len(trades))
+print("TRADES",n)
+print("WS HOURS",len(bars))
 print("ADDED",added)
 print("LAST CLOSED",st.get("last_closed"))
 print("CONTINUOUS20",st.get("continuous20"))
