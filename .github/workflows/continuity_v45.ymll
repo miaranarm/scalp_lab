@@ -1,0 +1,40 @@
+name: SCALP LAB V4.5 CONTINUITY
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scalp-lab-solusdt-data
+  cancel-in-progress: false
+
+jobs:
+  continuity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -q websocket-client
+
+      - name: Kline continuity
+        run: python -u live_continuity_v45.py
+
+      - name: Save
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/live_v4386.json
+          git diff --cached --quiet && exit 0
+          git commit -m "V45 kline continuity"
+          git pull --rebase origin main
+          git push
