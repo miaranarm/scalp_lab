@@ -1,0 +1,24 @@
+name: SCALP LAB V4.4.1 SOURCE TEST
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -q requests
+
+      - name: Test sources
+        run: python -u source_test_v441.py
