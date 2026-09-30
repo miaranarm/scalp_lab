@@ -1,0 +1,41 @@
+name: SCALP LAB V4.3.8.6f CONTINUITY
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: live-continuity-solusdt
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -q websocket-client requests pandas
+
+      - name: Run continuity collector
+        run: python -u live_continuity_v4386.py
+
+      - name: Save state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state results
+          git diff --cached --quiet || git commit -m "V438.6f continuity"
+          git push
