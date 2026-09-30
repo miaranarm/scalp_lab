@@ -1,4 +1,4 @@
-name: SCALP LAB V4.5.2 CONTINUITY
+name: SCALP LAB V4.5.3 CONTINUITY
 
 on:
   workflow_dispatch:
@@ -24,9 +24,9 @@ jobs:
         with:
           python-version: "3.11"
 
-      - run: pip install -q requests websocket-client
+      - run: pip install -q requests
 
-      - name: Continuity
+      - name: Futures REST failover
         run: python -u live_continuity_v452.py
 
       - name: Save
@@ -35,6 +35,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add state/live_v4386.json
           git diff --cached --quiet && exit 0
-          git commit -m "V452 continuity"
+          git commit -m "V453 futures continuity"
           git pull --rebase origin main
           git push
