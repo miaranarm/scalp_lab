@@ -658,25 +658,40 @@
       "volume": 132343.24000001026,
       "trades": 20801,
       "closed": false
+    },
+    {
+      "time": "2026-09-29T15:00:00+00:00",
+      "open": 120.18,
+      "high": 120.19,
+      "low": 118.25,
+      "close": 118.73,
+      "volume": 657698.6300004099,
+      "trades": 77680,
+      "closed": true
     }
   ],
-  "last_closed": "2026-09-28T23:00:00+00:00",
+  "last_closed": "2026-09-29T15:00:00+00:00",
   "warmup": true,
-  "updated": "2026-09-29T15:49:37.721667+00:00",
-  "live_trades": 29080,
-  "bad_messages": 104,
-  "closed_count": 72,
-  "gaps": [],
+  "updated": "2026-09-30T05:20:20.713337+00:00",
+  "live_trades": 15295,
+  "bad_messages": 112,
+  "closed_count": 73,
+  "gaps": [
+    [
+      "2026-09-28T23:00:00+00:00",
+      "2026-09-29T15:00:00+00:00"
+    ]
+  ],
   "live": {
-    "time": "2026-09-29T15:00:00+00:00",
-    "open": 120.18,
-    "high": 120.19,
-    "low": 118.25,
-    "close": 118.73,
-    "volume": 657698.6300004099,
-    "trades": 77680,
+    "time": "2026-09-30T05:00:00+00:00",
+    "open": 118.68,
+    "high": 118.74,
+    "low": 118.41,
+    "close": 118.67,
+    "volume": 119630.2500000069,
+    "trades": 15295,
     "closed": false
   },
-  "gap_to_live_hours": 15,
+  "gap_to_live_hours": 13,
   "continuous20": false
 }
