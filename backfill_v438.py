@@ -3,7 +3,7 @@ from pathlib import Path
 from datetime import datetime,timezone
 
 STATE=Path("state/live_v4386.json")
-S="SOLUSDT"; DAY="2026-09-29"; H=3600
+S="SOLUSDT"; H=3600
 END=int(datetime(2026,9,29,15,tzinfo=timezone.utc).timestamp())
 
 def ep(c):
@@ -22,55 +22,68 @@ print("V438 | BACKFILL")
 print("LAST",iso(last))
 print("MISSING",len(want))
 
-def archive(url):
-    try:
-        r=requests.get(url,timeout=60)
-        print("HTTP",r.status_code,"SIZE",len(r.content))
-        if r.status_code!=200:return []
-        z=zipfile.ZipFile(io.BytesIO(r.content))
-        out=[]
-        for fn in z.namelist():
-            with z.open(fn) as f:
-                out+=list(csv.reader(io.TextIOWrapper(f,encoding="utf-8")))
-        return out
-    except Exception as e:
-        print("ARCHIVE ERROR",e); return []
-
-# 1) Archive Binance
-base="https://data.binance.vision/data/futures/um"
-u=f"{base}/daily/klines/{S}/1h/{S}-1h-{DAY}.zip"
-rows=archive(u)
 got={}
 
-if rows:
-    for r in rows:
-        try:
-            t=int(r[0])//1000
-            if t in want: got[t]=r
-        except: pass
+# 1. Binance Data Vision
+day=iso(want[0])[:10]
+url=f"https://data.binance.vision/data/futures/um/daily/klines/{S}/1h/{S}-1h-{day}.zip"
 
-# 2) Fallback API Futures
-if len(got)!=len(want):
-    print("FALLBACK | Binance Futures API")
+try:
+    r=requests.get(url,timeout=60)
+    print("ARCHIVE HTTP",r.status_code,"SIZE",len(r.content))
+    if r.status_code==200:
+        z=zipfile.ZipFile(io.BytesIO(r.content))
+        for fn in z.namelist():
+            with z.open(fn) as f:
+                for x in csv.reader(io.TextIOWrapper(f,encoding="utf-8")):
+                    try:
+                        t=int(x[0])//1000
+                        if t in want: got[t]=x
+                    except: pass
+except Exception as e:
+    print("ARCHIVE ERROR",e)
+
+# 2. Binance Futures API
+if len(got)<len(want):
+    print("FALLBACK | Binance API")
     try:
-        p={
-            "symbol":S,"interval":"1h",
-            "startTime":want[0]*1000,
-            "endTime":END*1000-1,
-            "limit":100
-        }
+        p={"symbol":S,"interval":"1h",
+           "startTime":want[0]*1000,
+           "endTime":END*1000-1,"limit":100}
         r=requests.get(
             "https://fapi.binance.com/fapi/v1/klines",
             params=p,timeout=30)
-        print("API HTTP",r.status_code,"SIZE",len(r.content))
+        print("API HTTP",r.status_code)
         if r.status_code==200:
             for x in r.json():
                 t=int(x[0])//1000
                 if t in want: got[t]=x
         else:
-            print("API ERROR",r.text[:300])
+            print("API ERROR",r.text[:250])
     except Exception as e:
-        print("API ERROR",type(e).__name__,e)
+        print("API ERROR",e)
+
+# 3. Static klines fallback
+if len(got)<len(want):
+    print("FALLBACK | STATIC KLINES")
+    try:
+        # One monthly 1h file: <=744 candles
+        month=iso(want[0])[:7]
+        url=(
+            f"https://raw.githubusercontent.com/finom/static-klines/"
+            f"main/data/{S}/1h/{month}.json"
+        )
+        r=requests.get(url,timeout=30)
+        print("STATIC HTTP",r.status_code,"SIZE",len(r.content))
+
+        if r.status_code==200:
+            data=r.json()
+            for x in data:
+                t=int(x[0])
+                if t>10_000_000_000:t//=1000
+                if t in want: got[t]=x
+    except Exception as e:
+        print("STATIC ERROR",e)
 
 print("FOUND BARS",len(got),"/",len(want))
 
@@ -81,23 +94,25 @@ if len(got)!=len(want):
 template=cs[-1]
 out=[]
 
-for t,r in sorted(got.items()):
+for t in sorted(want):
+    r=got[t]
     c=template.copy()
+
     k="timestamp" if "timestamp" in c else "open_time"
     c[k]=iso(t) if isinstance(c[k],str) else t
 
-    # ZIP kline = CSV ; API kline = JSON
-    if isinstance(r,list) and len(r)>=12:
-        o,h,l,cl,v,tr=float(r[1]),float(r[2]),float(r[3]),float(r[4]),float(r[5]),int(r[8])
-    else:
-        continue
+    o,h,l,cl,v,tr=(
+        float(r[1]),float(r[2]),float(r[3]),
+        float(r[4]),float(r[5]),int(r[8])
+    )
 
-    vals={
-        "open":o,"high":h,"low":l,"close":cl,
-        "volume":v,"trades":tr,"closed":True
-    }
+    vals={"open":o,"high":h,"low":l,
+          "close":cl,"volume":v,
+          "trades":tr,"closed":True}
+
     for n,v in vals.items():
         if n in c:c[n]=v
+
     out.append(c)
 
 allc={ep(c):c for c in cs}
