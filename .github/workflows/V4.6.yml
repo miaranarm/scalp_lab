@@ -1,15 +1,17 @@
-name: V4.6 Binance Access Diagnostic
+name: V4.6 Live Continuity
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  diag:
+  live:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 2
 
     steps:
       - uses: actions/checkout@v4
@@ -18,7 +20,15 @@ jobs:
         with:
           python-version: "3.11"
 
-      - run: pip install -q requests websocket-client
+      - run: pip install -q websocket-client
 
-      - name: Diagnostic
-        run: python -u live_continuity_v46_diag.py
+      - name: V4.6
+        run: python -u live_continuity_v46.py
+
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/live_v4386.json
+          git diff --cached --quiet || git commit -m "V4.6 SOLUSDT live"
+          git push
