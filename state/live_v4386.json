@@ -791,13 +791,13 @@
     },
     {
       "time": "2026-09-29T14:00:00+00:00",
-      "open": 120.93,
-      "high": 121.24,
-      "low": 120.08,
-      "close": 120.15,
-      "volume": 1052685.0900016497,
-      "trades": 154100,
-      "closed": true
+      "open": 120.54,
+      "high": 120.74,
+      "low": 120.27,
+      "close": 120.66,
+      "volume": 132343.24000001026,
+      "trades": 20801,
+      "closed": false
     },
     {
       "time": "2026-09-29T15:00:00+00:00",
@@ -900,17 +900,17 @@
       "closed": true
     },
     {
-      "time": "2026-09-29T14:00:00+00:00",
-      "open": 120.54,
-      "high": 120.74,
-      "low": 120.27,
-      "close": 120.66,
-      "volume": 132343.24000001026,
-      "trades": 20801,
-      "closed": false
+      "time": "2026-09-30T07:00:00+00:00",
+      "open": 118.45,
+      "high": 118.46,
+      "low": 0.0,
+      "close": 118.41,
+      "volume": 7119.910000000054,
+      "trades": 1184,
+      "closed": true
     }
   ],
-  "last_closed": "2026-09-30T06:00:00+00:00",
+  "last_closed": "2026-09-30T07:00:00+00:00",
   "warmup": true,
   "updated": "2026-09-30T05:35:25.751784+00:00",
   "live_trades": 20654,
@@ -933,5 +933,15 @@
     "closed": false
   },
   "gap_to_live_hours": 13,
-  "continuous20": false
+  "continuous20": false,
+  "live_candle": {
+    "time": "2026-09-30T08:00:00+00:00",
+    "open": 118.42,
+    "high": 118.47,
+    "low": 0.0,
+    "close": 118.11,
+    "volume": 84491.30000000399,
+    "trades": 12919,
+    "closed": false
+  }
 }
