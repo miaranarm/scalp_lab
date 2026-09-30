@@ -1,0 +1,38 @@
+name: SCALP LAB V4.3.9 BACKFILL
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scalp-lab-backfill-solusdt
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -q requests
+
+      - name: Gap backfill
+        run: python -u backfill_v439.py
+
+      - name: Save state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/live_v4386.json
+          git diff --cached --quiet || git commit -m "V439 gap backfill"
+          git push
