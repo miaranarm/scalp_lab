@@ -918,9 +918,19 @@
       "volume": 7119.910000000054,
       "trades": 1184,
       "closed": true
+    },
+    {
+      "time": "2026-09-30T11:00:00+00:00",
+      "open": 119.83,
+      "high": 119.83,
+      "low": 119.13,
+      "close": 119.47,
+      "volume": 685125.87,
+      "trades": 100774,
+      "closed": true
     }
   ],
-  "last_closed": "2026-09-30T07:00:00+00:00",
+  "last_closed": "2026-09-30T11:00:00+00:00",
   "warmup": true,
   "updated": "2026-09-30T05:35:25.751784+00:00",
   "live_trades": 20654,
@@ -944,14 +954,5 @@
   },
   "gap_to_live_hours": 13,
   "continuous20": false,
-  "live_candle": {
-    "time": "2026-09-30T11:00:00+00:00",
-    "open": 119.83,
-    "high": 119.83,
-    "low": 119.13,
-    "close": 119.35,
-    "volume": 657047.37,
-    "trades": 95838,
-    "closed": false
-  }
+  "live_candle": null
 }
