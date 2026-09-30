@@ -672,9 +672,9 @@
   ],
   "last_closed": "2026-09-29T15:00:00+00:00",
   "warmup": true,
-  "updated": "2026-09-30T05:20:20.713337+00:00",
-  "live_trades": 15295,
-  "bad_messages": 112,
+  "updated": "2026-09-30T05:35:25.751784+00:00",
+  "live_trades": 20654,
+  "bad_messages": 105,
   "closed_count": 73,
   "gaps": [
     [
@@ -685,11 +685,11 @@
   "live": {
     "time": "2026-09-30T05:00:00+00:00",
     "open": 118.68,
-    "high": 118.74,
+    "high": 119.49,
     "low": 118.41,
-    "close": 118.67,
-    "volume": 119630.2500000069,
-    "trades": 15295,
+    "close": 119.32,
+    "volume": 261829.67999994894,
+    "trades": 35949,
     "closed": false
   },
   "gap_to_live_hours": 13,
