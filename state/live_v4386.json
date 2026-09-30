@@ -955,13 +955,13 @@
   "gap_to_live_hours": 13,
   "continuous20": false,
   "live_candle": {
-    "time": "2026-09-30T13:00:00+00:00",
-    "open": 121.87,
-    "high": 122.73,
-    "low": 121.62,
-    "close": 122.05,
-    "volume": 878716.48,
-    "trades": 90105,
+    "time": "2026-09-30T14:00:00+00:00",
+    "open": 120.98,
+    "high": 121.26,
+    "low": 119.62,
+    "close": 119.63,
+    "volume": 827553.1,
+    "trades": 105903,
     "closed": false
   }
 }
