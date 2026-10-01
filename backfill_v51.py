@@ -15,26 +15,21 @@ def main():
 
     candles=s.setdefault("candles",[])
     by={x["time"]:x for x in candles if x.get("time")}
-
     closed=[x for x in candles if x.get("closed")]
     last=max((dt(x["time"]) for x in closed),default=START)
 
-    end=last
     need=[]
     t=START
-    while t<=end:
-        k=iso(t)
-        if k not in by:
-            need.append(t)
+    while t<=last:
+        if iso(t) not in by: need.append(t)
         t+=timedelta(hours=1)
 
     print("LAST",iso(last))
     print("MISSING",len(need))
 
-    days=sorted({x.date() for x in need})
     added=0
 
-    for day in days:
+    for day in sorted({x.date() for x in need}):
         url=f"{BASE}/SOLUSDT-1h-{day}.zip"
         print("DOWNLOAD",day)
 
@@ -42,16 +37,22 @@ def main():
             data=urllib.request.urlopen(url,timeout=30).read()
 
             with zipfile.ZipFile(io.BytesIO(data)) as z:
-                name=z.namelist()[0]
-                raw=z.read(name).decode()
+                raw=z.read(z.namelist()[0]).decode()
 
             for line in raw.splitlines():
                 p=line.split(",")
                 if len(p)<11: continue
 
-                t=datetime.fromtimestamp(
-                    int(p[0])/1000,timezone.utc
-                )
+                # Ignore Binance CSV header
+                if p[0].strip().lower()=="open_time":
+                    continue
+
+                try:
+                    t=datetime.fromtimestamp(
+                        int(p[0])/1000,timezone.utc
+                    )
+                except (ValueError,TypeError):
+                    continue
 
                 k=iso(t)
 
@@ -85,17 +86,12 @@ def main():
 
     if closed:
         s["last_closed"]=closed[-1]["time"]
-
         recent=closed[-20:]
-        s["continuous20"]=(
-            len(recent)==20 and
-            all(
-                dt(recent[i]["time"])-
-                dt(recent[i-1]["time"])
-                ==timedelta(hours=1)
-                for i in range(1,20)
-            )
-        )
+        s["continuous20"]=(len(recent)==20 and all(
+            dt(recent[i]["time"])-
+            dt(recent[i-1]["time"])==timedelta(hours=1)
+            for i in range(1,20)
+        ))
     else:
         s["continuous20"]=False
 
@@ -105,9 +101,9 @@ def main():
         b=dt(closed[-1]["time"])
         seen={x["time"] for x in closed}
         t=a
+
         while t<=b:
-            if iso(t) not in seen:
-                missing.append(iso(t))
+            if iso(t) not in seen: missing.append(iso(t))
             t+=timedelta(hours=1)
 
     s["backfill_pending"]=missing
