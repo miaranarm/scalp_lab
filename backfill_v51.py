@@ -18,21 +18,19 @@ def main():
     candles=s.setdefault("candles",[])
     by={x["time"]:x for x in candles if x.get("time")}
 
-    # 48 timestamps attendus
     expected=[]
     t=START
     while t<=CUTOFF:
         expected.append(iso(t))
         t+=timedelta(hours=1)
 
-    missing=[x for x in expected if x not in by]
-
     print("TARGET",iso(CUTOFF))
-    print("MISSING",len(missing))
+    print("EXPECTED",len(expected))
 
-    added=0
+    added=updated=0
 
-    for day in sorted({dt(x).date() for x in missing}):
+    # Toujours vérifier les 2 archives historiques
+    for day in (START.date(),CUTOFF.date()):
         url=f"{BASE}/SOLUSDT-1h-{day}.zip"
         print("DOWNLOAD",day)
 
@@ -58,18 +56,21 @@ def main():
                     continue
 
                 k=iso(t)
+                x={
+                    "time":k,
+                    "open":float(p[1]),
+                    "high":float(p[2]),
+                    "low":float(p[3]),
+                    "close":float(p[4]),
+                    "volume":float(p[5]),
+                    "trades":int(p[8]),
+                    "closed":True
+                }
 
-                if k not in by:
-                    x={
-                        "time":k,
-                        "open":float(p[1]),
-                        "high":float(p[2]),
-                        "low":float(p[3]),
-                        "close":float(p[4]),
-                        "volume":float(p[5]),
-                        "trades":int(p[8]),
-                        "closed":True
-                    }
+                if k in by:
+                    by[k].update(x)
+                    updated+=1
+                else:
                     candles.append(x)
                     by[k]=x
                     added+=1
@@ -77,12 +78,11 @@ def main():
             print("OK",day)
 
         except Exception as e:
-            print("PENDING",day,type(e).__name__,e)
+            print("ERROR",day,type(e).__name__,e)
 
     candles.sort(key=lambda x:x["time"])
     s["candles"]=candles[-5000:]
 
-    # Historique V5.1 uniquement
     hist=sorted([
         x for x in candles
         if x.get("closed")
@@ -106,8 +106,10 @@ def main():
     s["backfill_continuous20"]=continuous20
 
     print("ADDED",added)
+    print("UPDATED",updated)
     print("CLOSED",len(hist),"/",len(expected))
     print("PENDING",len(pending))
+    if pending: print("MISSING_TIMES",pending)
     print("BACKFILL_LAST",s["backfill_last_closed"])
     print("BACKFILL_CONTINUOUS20",continuous20)
 
