@@ -1,4 +1,4 @@
-name: SCALP LAB V4.4 Trade Level Forensics
+name: SCALP LAB V4.4 Trade Forensics
 
 on:
   workflow_dispatch:
@@ -6,10 +6,14 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: scalp-lab-v44
+  cancel-in-progress: false
+
 jobs:
   forensic:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -19,38 +23,34 @@ jobs:
           python-version: "3.11"
 
       - name: Install
-        run: pip install -q requests pandas numpy
+        run: pip install -r requirements.txt
 
       - name: Run V4.4
         env:
           PYTHONUNBUFFERED: "1"
-        run: python -u research_v44.py
+        run: |
+          python -u research_v44.py \
+            --symbols "BTCUSDT,ETHUSDT,SOLUSDT" \
+            --intervals "5m,15m" \
+            --days "730"
 
-      - name: Show report
-        if: always()
+      - name: Show results
         run: |
           echo "===== V4.4 ====="
-          if [ -f results/summary_v44.md ]; then
-            cat results/summary_v44.md
-          else
-            echo "summary_v44.md absent"
-          fi
-
+          cat results/summary_v44.md
           echo ""
           echo "===== FILES ====="
-          ls -lh results/v44_* 2>/dev/null || true
+          ls -lh results/v44_*
 
       - name: Commit
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add research_v44.py results/v44_*.csv results/summary_v44.md
-
+          git add results/v44_*
           if git diff --cached --quiet; then
-            echo "Nothing to commit."
+            echo "No V4.4 changes."
           else
-            git commit -m "Research V4.4 trade level forensics"
+            git commit -m "Research V4.4 trade forensics"
             git push
           fi
