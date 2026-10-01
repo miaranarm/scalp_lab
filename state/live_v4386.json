@@ -655,7 +655,7 @@
       "high": 119.08,
       "low": 117.99,
       "close": 118.02,
-      "volume": 490429.109999853,
+      "volume": 490429.11,
       "trades": 79532,
       "closed": true
     },
@@ -665,7 +665,7 @@
       "high": 118.38,
       "low": 116.25,
       "close": 117.07,
-      "volume": 1376291.1200022246,
+      "volume": 1376291.12,
       "trades": 169434,
       "closed": true
     },
@@ -675,7 +675,7 @@
       "high": 117.27,
       "low": 116.36,
       "close": 116.88,
-      "volume": 575865.6200000326,
+      "volume": 575865.62,
       "trades": 124626,
       "closed": true
     },
@@ -685,7 +685,7 @@
       "high": 118.0,
       "low": 116.85,
       "close": 117.81,
-      "volume": 458310.8799998411,
+      "volume": 458310.88,
       "trades": 93980,
       "closed": true
     },
@@ -695,7 +695,7 @@
       "high": 118.06,
       "low": 117.19,
       "close": 117.64,
-      "volume": 386041.0499998719,
+      "volume": 386041.05,
       "trades": 73104,
       "closed": true
     },
@@ -705,7 +705,7 @@
       "high": 118.22,
       "low": 117.02,
       "close": 118.21,
-      "volume": 585826.7500000042,
+      "volume": 585826.75,
       "trades": 103216,
       "closed": true
     },
@@ -715,7 +715,7 @@
       "high": 119.25,
       "low": 118.17,
       "close": 119.2,
-      "volume": 803257.1200004057,
+      "volume": 803257.12,
       "trades": 101057,
       "closed": true
     },
@@ -725,7 +725,7 @@
       "high": 119.91,
       "low": 118.95,
       "close": 119.48,
-      "volume": 700573.8700002382,
+      "volume": 700573.87,
       "trades": 86117,
       "closed": true
     },
@@ -735,7 +735,7 @@
       "high": 119.99,
       "low": 118.84,
       "close": 119.12,
-      "volume": 766135.5100003239,
+      "volume": 766135.51,
       "trades": 92609,
       "closed": true
     },
@@ -745,7 +745,7 @@
       "high": 120.06,
       "low": 118.79,
       "close": 119.87,
-      "volume": 653106.6700001409,
+      "volume": 653106.67,
       "trades": 73680,
       "closed": true
     },
@@ -755,7 +755,7 @@
       "high": 119.98,
       "low": 119.15,
       "close": 119.37,
-      "volume": 442284.5399999251,
+      "volume": 442284.54,
       "trades": 59133,
       "closed": true
     },
@@ -765,7 +765,7 @@
       "high": 120.37,
       "low": 119.16,
       "close": 120.08,
-      "volume": 663302.2100001348,
+      "volume": 663302.21,
       "trades": 82824,
       "closed": true
     },
@@ -775,7 +775,7 @@
       "high": 121.0,
       "low": 119.89,
       "close": 120.8,
-      "volume": 1084908.0700009444,
+      "volume": 1084908.07,
       "trades": 126391,
       "closed": true
     },
@@ -785,28 +785,28 @@
       "high": 121.62,
       "low": 120.57,
       "close": 120.92,
-      "volume": 1421789.9800018845,
+      "volume": 1421789.98,
       "trades": 186464,
       "closed": true
     },
     {
       "time": "2026-09-29T14:00:00+00:00",
-      "open": 120.54,
-      "high": 120.74,
-      "low": 120.27,
-      "close": 120.66,
-      "volume": 132343.24000001026,
-      "trades": 20801,
-      "closed": false
+      "open": 120.93,
+      "high": 121.24,
+      "low": 120.08,
+      "close": 120.15,
+      "volume": 1052685.09,
+      "trades": 154100,
+      "closed": true
     },
     {
       "time": "2026-09-29T15:00:00+00:00",
-      "open": 120.18,
-      "high": 120.19,
-      "low": 118.25,
-      "close": 118.73,
-      "volume": 657698.6300004099,
-      "trades": 77680,
+      "open": 120.16,
+      "high": 120.25,
+      "low": 117.89,
+      "close": 118.16,
+      "volume": 2012437.8,
+      "trades": 233103,
       "closed": true
     },
     {
@@ -815,7 +815,7 @@
       "high": 118.68,
       "low": 117.49,
       "close": 118.01,
-      "volume": 841066.8300004987,
+      "volume": 841066.83,
       "trades": 127444,
       "closed": true
     },
@@ -825,7 +825,7 @@
       "high": 118.3,
       "low": 117.29,
       "close": 117.66,
-      "volume": 517651.18999984494,
+      "volume": 517651.19,
       "trades": 90622,
       "closed": true
     },
@@ -835,7 +835,7 @@
       "high": 119.28,
       "low": 117.65,
       "close": 119.11,
-      "volume": 742333.6100003755,
+      "volume": 742333.61,
       "trades": 112112,
       "closed": true
     },
@@ -845,7 +845,7 @@
       "high": 119.5,
       "low": 118.53,
       "close": 118.76,
-      "volume": 528774.6899998309,
+      "volume": 528774.69,
       "trades": 83308,
       "closed": true
     },
@@ -855,7 +855,7 @@
       "high": 119.2,
       "low": 118.54,
       "close": 118.99,
-      "volume": 253907.66999993764,
+      "volume": 253907.67,
       "trades": 50853,
       "closed": true
     },
@@ -865,7 +865,7 @@
       "high": 119.14,
       "low": 118.43,
       "close": 118.87,
-      "volume": 361852.84999995027,
+      "volume": 361852.85,
       "trades": 53932,
       "closed": true
     },
@@ -875,7 +875,7 @@
       "high": 119.54,
       "low": 118.8,
       "close": 119.05,
-      "volume": 425368.59999992227,
+      "volume": 425368.6,
       "trades": 63690,
       "closed": true
     },
@@ -885,7 +885,7 @@
       "high": 119.62,
       "low": 118.82,
       "close": 119.09,
-      "volume": 386431.14999991644,
+      "volume": 386431.15,
       "trades": 58981,
       "closed": true
     },
@@ -951,22 +951,22 @@
     },
     {
       "time": "2026-09-30T06:00:00+00:00",
-      "open": 118.31,
-      "high": 118.49,
-      "low": 0.0,
+      "open": 119.04,
+      "high": 119.19,
+      "low": 118.0,
       "close": 118.06,
-      "volume": 54726.92000000163,
-      "trades": 8430,
+      "volume": 661068.44,
+      "trades": 100030,
       "closed": true
     },
     {
       "time": "2026-09-30T07:00:00+00:00",
-      "open": 118.45,
-      "high": 118.46,
-      "low": 0.0,
+      "open": 118.05,
+      "high": 118.89,
+      "low": 117.8,
       "close": 118.41,
-      "volume": 7119.910000000054,
-      "trades": 1184,
+      "volume": 630937.6,
+      "trades": 87999,
       "closed": true
     },
     {
@@ -1275,9 +1275,7 @@
   "gap_to_live_hours": 13,
   "continuous20": false,
   "live_candle": null,
-  "backfill_pending": [
-    "2026-09-29T14:00:00+00:00"
-  ],
+  "backfill_pending": [],
   "backfill_last_closed": "2026-09-30T23:00:00+00:00",
   "backfill_continuous20": true
 }
