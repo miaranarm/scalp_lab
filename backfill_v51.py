@@ -3,40 +3,36 @@ from datetime import datetime,timezone,timedelta
 
 STATE="state/live_v4386.json"
 BASE="https://data.binance.vision/data/futures/um/daily/klines/SOLUSDT/1h"
-
 START=datetime(2026,9,29,tzinfo=timezone.utc)
 CUTOFF=datetime(2026,9,30,23,tzinfo=timezone.utc)
 
-def dt(s):
-    return datetime.fromisoformat(s.replace("Z","+00:00"))
-
-def iso(d):
-    return d.isoformat()
+def dt(s): return datetime.fromisoformat(s.replace("Z","+00:00"))
+def iso(d): return d.isoformat()
 
 def main():
     print("V51 | SOLUSDT 1H SMART BACKFILL")
     print("CUTOFF",iso(CUTOFF))
 
-    with open(STATE) as f:
-        s=json.load(f)
+    with open(STATE) as f:s=json.load(f)
 
     candles=s.setdefault("candles",[])
     by={x["time"]:x for x in candles if x.get("time")}
 
-    need=[]
+    # 48 timestamps attendus
+    expected=[]
     t=START
-
     while t<=CUTOFF:
-        if iso(t) not in by:
-            need.append(t)
+        expected.append(iso(t))
         t+=timedelta(hours=1)
 
+    missing=[x for x in expected if x not in by]
+
     print("TARGET",iso(CUTOFF))
-    print("MISSING",len(need))
+    print("MISSING",len(missing))
 
     added=0
 
-    for day in sorted({x.date() for x in need}):
+    for day in sorted({dt(x).date() for x in missing}):
         url=f"{BASE}/SOLUSDT-1h-{day}.zip"
         print("DOWNLOAD",day)
 
@@ -48,10 +44,7 @@ def main():
 
             for line in raw.splitlines():
                 p=line.split(",")
-
-                if len(p)<11:
-                    continue
-                if p[0].strip().lower()=="open_time":
+                if len(p)<11 or p[0].strip().lower()=="open_time":
                     continue
 
                 try:
@@ -77,7 +70,6 @@ def main():
                         "trades":int(p[8]),
                         "closed":True
                     }
-
                     candles.append(x)
                     by[k]=x
                     added+=1
@@ -85,57 +77,37 @@ def main():
             print("OK",day)
 
         except Exception as e:
-            print(
-                "PENDING",
-                day,
-                type(e).__name__,
-                e
-            )
+            print("PENDING",day,type(e).__name__,e)
 
     candles.sort(key=lambda x:x["time"])
     s["candles"]=candles[-5000:]
 
     # Historique V5.1 uniquement
-    hist=sorted(
-        [
-            x for x in candles
-            if x.get("closed")
-            and START<=dt(x["time"])<=CUTOFF
-        ],
-        key=lambda x:x["time"]
-    )
+    hist=sorted([
+        x for x in candles
+        if x.get("closed")
+        and START<=dt(x["time"])<=CUTOFF
+    ],key=lambda x:x["time"])
 
-    missing=[]
-
-    if hist:
-        seen={x["time"] for x in hist}
-        t=START
-
-        while t<=CUTOFF:
-            if iso(t) not in seen:
-                missing.append(iso(t))
-            t+=timedelta(hours=1)
+    seen={x["time"] for x in hist}
+    pending=[x for x in expected if x not in seen]
 
     recent=hist[-20:]
-
     continuous20=(
         len(recent)==20 and all(
             dt(recent[i]["time"])-
-            dt(recent[i-1]["time"])
-            ==timedelta(hours=1)
+            dt(recent[i-1]["time"])==timedelta(hours=1)
             for i in range(1,20)
         )
     )
 
-    s["backfill_last_closed"]=(
-        hist[-1]["time"] if hist else None
-    )
-    s["backfill_pending"]=missing
+    s["backfill_last_closed"]=hist[-1]["time"] if hist else None
+    s["backfill_pending"]=pending
     s["backfill_continuous20"]=continuous20
 
     print("ADDED",added)
-    print("CLOSED",len(hist))
-    print("PENDING",len(missing))
+    print("CLOSED",len(hist),"/",len(expected))
+    print("PENDING",len(pending))
     print("BACKFILL_LAST",s["backfill_last_closed"])
     print("BACKFILL_CONTINUOUS20",continuous20)
 
