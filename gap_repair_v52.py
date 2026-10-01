@@ -1,8 +1,8 @@
 import os,json,urllib.request,urllib.parse
 from datetime import datetime,timezone,timedelta
-from urllib.error import HTTPError,URLError
 
 STATE="state/live_v4386.json"
+
 HOSTS=[
  "fapi.binance.com",
  "fapi1.binance.com",
@@ -18,10 +18,36 @@ TARGETS=[
  "2026-10-01T13:00:00+00:00"
 ]
 
+def get(host,q):
+    url=f"https://{host}/fapi/v1/klines?{q}"
+    try:
+        r=urllib.request.urlopen(
+            urllib.request.Request(
+                url,headers={"User-Agent":"Mozilla/5.0"}
+            ),timeout=15
+        ).read()
+
+        if not r:
+            return None,"EMPTY"
+
+        try:
+            x=json.loads(r)
+        except Exception:
+            return None,"NON_JSON"
+
+        if not isinstance(x,list):
+            return None,"BAD_JSON"
+
+        return x,None
+
+    except Exception as e:
+        return None,type(e).__name__
+
 def main():
     print("V52 | SOLUSDT GAP REPAIR")
 
-    with open(STATE) as f:s=json.load(f)
+    with open(STATE) as f:
+        s=json.load(f)
 
     candles=s.setdefault("candles",[])
     by={x["time"]:x for x in candles if x.get("time")}
@@ -40,33 +66,30 @@ def main():
     data=None
 
     for host in HOSTS:
-        url=f"https://{host}/fapi/v1/klines?{q}"
         print("TRY",host)
 
-        try:
-            req=urllib.request.Request(
-                url,
-                headers={"User-Agent":"Mozilla/5.0"}
-            )
-            raw=urllib.request.urlopen(req,timeout=15).read()
-            data=json.loads(raw)
+        data,err=get(host,q)
+
+        if data is not None:
             print("OK",host,"KLINES",len(data))
             break
 
-        except (HTTPError,URLError,TimeoutError) as e:
-            print("FAIL",host,type(e).__name__,getattr(e,"code",""))
+        print("FAIL",host,err)
 
     if data is None:
-        print("NO BINANCE ENDPOINT AVAILABLE")
+        print("NO USABLE BINANCE ENDPOINT")
         print("STATE NOT MODIFIED")
         raise SystemExit(1)
 
     added=updated=0
 
     for p in data:
-        k=datetime.fromtimestamp(
-            int(p[0])/1000,timezone.utc
-        ).isoformat()
+        try:
+            k=datetime.fromtimestamp(
+                int(p[0])/1000,timezone.utc
+            ).isoformat()
+        except Exception:
+            continue
 
         if k not in TARGETS:
             continue
