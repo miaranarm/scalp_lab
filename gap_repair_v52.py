@@ -1,51 +1,65 @@
 import os,json,urllib.request,urllib.parse
 from datetime import datetime,timezone,timedelta
+from urllib.error import HTTPError,URLError
 
 STATE="state/live_v4386.json"
-API="https://fapi.binance.com/fapi/v1/klines"
+HOSTS=[
+ "fapi.binance.com",
+ "fapi1.binance.com",
+ "fapi2.binance.com",
+ "fapi3.binance.com",
+ "fapi4.binance.com"
+]
 
 TARGETS=[
-"2026-10-01T00:00:00+00:00",
-"2026-10-01T06:00:00+00:00",
-"2026-10-01T12:00:00+00:00",
-"2026-10-01T13:00:00+00:00"
+ "2026-10-01T00:00:00+00:00",
+ "2026-10-01T06:00:00+00:00",
+ "2026-10-01T12:00:00+00:00",
+ "2026-10-01T13:00:00+00:00"
 ]
 
 def main():
     print("V52 | SOLUSDT GAP REPAIR")
 
-    with open(STATE) as f:
-        s=json.load(f)
+    with open(STATE) as f:s=json.load(f)
 
     candles=s.setdefault("candles",[])
     by={x["time"]:x for x in candles if x.get("time")}
 
-    start=int(datetime.fromisoformat(TARGETS[0]).timestamp()*1000)
-    end=int((
-        datetime.fromisoformat(TARGETS[-1])+
-        timedelta(hours=1)
-    ).timestamp()*1000)
+    a=datetime.fromisoformat(TARGETS[0])
+    b=datetime.fromisoformat(TARGETS[-1])+timedelta(hours=1)
 
     q=urllib.parse.urlencode({
         "symbol":"SOLUSDT",
         "interval":"1h",
-        "startTime":start,
-        "endTime":end,
+        "startTime":int(a.timestamp()*1000),
+        "endTime":int(b.timestamp()*1000),
         "limit":10
     })
 
-    url=f"{API}?{q}"
-    print("REQUEST",url)
+    data=None
 
-    req=urllib.request.Request(
-        url,headers={"User-Agent":"Mozilla/5.0"}
-    )
+    for host in HOSTS:
+        url=f"https://{host}/fapi/v1/klines?{q}"
+        print("TRY",host)
 
-    data=json.loads(
-        urllib.request.urlopen(req,timeout=30).read()
-    )
+        try:
+            req=urllib.request.Request(
+                url,
+                headers={"User-Agent":"Mozilla/5.0"}
+            )
+            raw=urllib.request.urlopen(req,timeout=15).read()
+            data=json.loads(raw)
+            print("OK",host,"KLINES",len(data))
+            break
 
-    print("KLINES",len(data))
+        except (HTTPError,URLError,TimeoutError) as e:
+            print("FAIL",host,type(e).__name__,getattr(e,"code",""))
+
+    if data is None:
+        print("NO BINANCE ENDPOINT AVAILABLE")
+        print("STATE NOT MODIFIED")
+        raise SystemExit(1)
 
     added=updated=0
 
@@ -112,7 +126,8 @@ def main():
 
     if missing:
         print("REPAIR INCOMPLETE")
-        return
+        print("STATE NOT MODIFIED")
+        raise SystemExit(1)
 
     s["last_closed"]=closed[-1]["time"]
     s["continuous20"]=continuous20
@@ -121,6 +136,7 @@ def main():
         json.dump(s,f,indent=2)
 
     os.replace(STATE+".tmp",STATE)
+
     print("STATE UPDATED")
     print("REPAIR COMPLETE")
 
