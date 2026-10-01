@@ -1,563 +1,324 @@
+"""
+SCALP LAB V4.4 — TRADE-LEVEL FORENSICS
+Rejoue les stratégies sélectionnées par V4.1 et exporte chaque trade OOS.
+FINAL HOLDOUT exclu.
+"""
+
+from __future__ import annotations
+import argparse, time
 from pathlib import Path
-from collections import Counter
-import time
 import numpy as np
 import pandas as pd
-
 import research_v41 as v41
 
-R = Path("results")
-WF = R / "walk_forward_v41.csv"
+OUT=Path("results")
+TRADES=OUT/"v44_trades_oos.csv"
 
-def pct(x):
-    return "nan" if not np.isfinite(x) else f"{x*100:+.4f}%"
+def replay(L, signal, tp_m, sl_m, hold, profile, slip):
+    c,h,lo,atr=L["c"],L["h"],L["l"],L["atr"]
+    t=L["time"]
+    fee=(v41.FEE_MAKER if profile!="taker" else v41.FEE_TAKER)
+    maker_tp=profile in ("maker_tp","maker_both")
+    out=[]; free=0
 
-def trade_rows(L, trades, entry):
-    rows = []
+    for j in np.flatnonzero(signal):
+        if j<free or j+1>=len(c) or not np.isfinite(atr[j]):
+            continue
+        side=int(signal[j]); a=atr[j]
+        if a<=0: continue
 
-    for t in trades:
-        j, ei, xi = t["signal_i"], t["entry_i"], t["exit_i"]
-        side = int(t["side"])
-
-        ep = float(L["c"][j] if ei == j + 1 else L["c"][ei])
-        # Le simulateur V4.1 ne stocke pas le prix exact d'entrée.
-        # On le reconstruit à partir des règles du profil.
-        atr = float(L["atr"][j])
-
-        if t["entry_i"] == j + 1:
-            if side == 1:
-                ep = float(L["c"][j + 1] * (1 + v41.SLIP.get(
-                    CURRENT_SYMBOL, v41.DEFAULT_SLIP)))
+        if profile=="maker_both":
+            if side==1:
+                if lo[j+1]>c[j]*(1-v41.THROUGH): continue
             else:
-                ep = float(L["c"][j + 1] * (1 - v41.SLIP.get(
-                    CURRENT_SYMBOL, v41.DEFAULT_SLIP)))
-
-        # Pour maker_both, l'entrée est le close du signal.
-        # Pour maker_tp, entrée taker.
-        # Le profil est injecté plus bas dans chaque ligne.
-        xp = float(L["c"][xi])
-
-        if xi < len(L["c"]):
-            if t["kind"] == "sl":
-                xp = float(
-                    L["c"][j] -
-                    side * 0
-                )
-
-        a = max(j + 1, ei)
-        b = min(xi, len(L["h"]) - 1)
-
-        hh = L["h"][a:b+1]
-        ll = L["l"][a:b+1]
-
-        if len(hh):
-            if side == 1:
-                mfe = float(np.max(hh) / ep - 1)
-                mae = float(np.min(ll) / ep - 1)
-            else:
-                mfe = float(1 - np.min(ll) / ep)
-                mae = float(1 - np.max(hh) / ep)
+                if h[j+1]<c[j]*(1+v41.THROUGH): continue
+            entry=c[j]
+            entry_fee=v41.FEE_MAKER
         else:
-            mfe = mae = np.nan
+            entry=c[j+1]*(1+side*slip)
+            entry_fee=v41.FEE_TAKER
 
-        rows.append({
-            "signal_time": pd.to_datetime(
-                entry["time"].iloc[j], unit="ms", utc=True
-            ),
-            "entry_time": pd.to_datetime(
-                entry["time"].iloc[ei], unit="ms", utc=True
-            ),
-            "exit_time": pd.to_datetime(
-                entry["time"].iloc[xi], unit="ms", utc=True
-            ),
-            "side": "LONG" if side == 1 else "SHORT",
-            "entry_price": ep,
-            "exit_price": xp,
-            "gross": t["gross"],
-            "net": t["net"],
-            "cost": t["gross"] - t["net"],
-            "exit": t["kind"],
-            "duration_bars": t["duration"],
-            "duration_hours": t["duration"] *
-                v41.INTERVAL_MS[CURRENT_INTERVAL] / 3600000,
-            "mfe": mfe,
-            "mae": mae,
+        tp=entry+side*tp_m*a
+        sl=entry-side*sl_m*a
+        tp_touch=tp*(1+side*v41.THROUGH) if maker_tp else tp
+        end=min(j+hold,len(c)-1)
+
+        exit_i=end; exit_px=c[end]; kind="time"
+
+        for k in range(j+1,end+1):
+            hit_tp=h[k]>=tp_touch if side==1 else lo[k]<=tp_touch
+            hit_sl=lo[k]<=sl if side==1 else h[k]>=sl
+
+            if hit_sl:
+                exit_i=k
+                exit_px=sl*(1-side*slip)
+                kind="sl"
+                break
+
+            if hit_tp:
+                exit_i=k
+                exit_px=tp if maker_tp else tp*(1-side*slip)
+                kind="tp"
+                break
+
+        if kind=="time":
+            exit_px*=1-side*slip
+
+        exit_fee=(
+            v41.FEE_MAKER if kind=="tp" and profile!="taker"
+            else v41.FEE_TAKER
+        )
+
+        gross=side*(exit_px-entry)/entry
+        net=(1+gross)*(1-entry_fee)*(1-exit_fee)-1
+
+        hi=h[j+1:exit_i+1]
+        lw=lo[j+1:exit_i+1]
+
+        if side==1:
+            mfe=(np.max(hi)-entry)/entry
+            mae=(np.min(lw)-entry)/entry
+        else:
+            mfe=(entry-np.min(lw))/entry
+            mae=(entry-np.max(hi))/entry
+
+        out.append({
+            "signal_i":j,
+            "entry_i":j+1,
+            "exit_i":exit_i,
+            "signal_time":int(t[j]),
+            "entry_time":int(t[j+1]),
+            "exit_time":int(t[exit_i]),
+            "side":"LONG" if side==1 else "SHORT",
+            "entry_price":entry,
+            "exit_price":exit_px,
+            "tp_price":tp,
+            "sl_price":sl,
+            "gross":gross,
+            "net":net,
+            "entry_fee":entry_fee,
+            "exit_fee":exit_fee,
+            "exit_reason":kind.upper(),
+            "duration_bars":exit_i-j,
+            "mfe":mfe,
+            "mae":mae,
         })
+        free=exit_i+1
 
-    return rows
+    return out
 
 
-def analyse(df, keys):
-    if df.empty:
-        return pd.DataFrame()
+def load_pair(symbol,interval,days):
+    now=int(time.time()*1000)
+    start=now-days*86_400_000
+    ctx=v41.CONTEXT_ENTRY_TO_CTX.get(interval,"1h")
+    warm=v41.CONTEXT_WARMUP_DAYS.get(ctx,12)
 
-    g = df.groupby(keys, dropna=False)
+    entry=v41.to_frame(v41.fetch_vision(symbol,interval,start,now))
+    h1=v41.to_frame(v41.fetch_vision(
+        symbol,ctx,start-warm*86_400_000,now
+    ))
+    entry=entry[entry.time>=start].reset_index(drop=True)
+    ef,cands=v41.make_candidates(entry,h1,ctx)
 
-    x = g.agg(
-        trades=("net", "count"),
-        mean_net=("net", "mean"),
-        median_net=("net", "median"),
-        mean_gross=("gross", "mean"),
-        mean_cost=("cost", "mean"),
-        win_rate=("net", lambda z: float((z > 0).mean())),
-        mean_mfe=("mfe", "mean"),
-        mean_mae=("mae", "mean"),
-        median_duration=("duration_hours", "median"),
-        tp=("exit", lambda z: int((z == "tp").sum())),
-        sl=("exit", lambda z: int((z == "sl").sum())),
-        time_exit=("exit", lambda z: int((z == "time").sum())),
-    ).reset_index()
+    L=dict(ef)
+    L["time"]=entry["time"].to_numpy(float)
 
-    return x
+    folds,holdout=v41.make_folds(len(entry),interval)
+    return entry,L,cands,folds,holdout
 
 
 def main():
-    global CURRENT_SYMBOL, CURRENT_INTERVAL
+    ap=argparse.ArgumentParser()
+    ap.add_argument("--symbols",default="BTCUSDT,ETHUSDT,SOLUSDT")
+    ap.add_argument("--intervals",default="5m,15m")
+    ap.add_argument("--days",type=int,default=730)
+    args=ap.parse_args()
 
-    t0 = time.time()
+    wf=pd.read_csv(OUT/"walk_forward_v41.csv")
+    wf=wf[wf["fold"].astype(str)!="FINAL"].copy()
 
-    print("=" * 72)
-    print("SCALP LAB V4.4 — TRADE LEVEL FORENSICS")
-    print("=" * 72)
+    rows=[]
 
-    if not WF.exists():
-        raise SystemExit("ERREUR: results/walk_forward_v41.csv absent")
-
-    wf = pd.read_csv(WF)
-
-    oos = wf[wf["fold"].astype(str) != "FINAL"].copy()
-    hold = wf[wf["fold"].astype(str) == "FINAL"].copy()
-
-    print(f"V4.1 ROWS   : {len(wf)}")
-    print(f"OOS ROWS    : {len(oos)}")
-    print(f"HOLDOUT ROWS: {len(hold)}")
-
-    all_trades = []
-
-    symbols = sorted(oos.symbol.dropna().unique())
-    intervals = sorted(oos.interval.dropna().unique())
-
-    end_ms = int(time.time() * 1000)
-    start_ms = end_ms - 730 * 86_400_000
-
-    for interval in intervals:
-        for symbol in symbols:
-
-            CURRENT_SYMBOL = symbol
-            CURRENT_INTERVAL = interval
-
-            pair = oos[
-                (oos.symbol == symbol) &
-                (oos.interval == interval)
-            ].copy()
-
-            if pair.empty:
+    for interval in [x.strip() for x in args.intervals.split(",")]:
+        for symbol in [x.strip() for x in args.symbols.split(",")]:
+            q=wf[(wf.symbol==symbol)&(wf.interval==interval)]
+            if q.empty:
                 continue
 
-            ctx = v41.CONTEXT_ENTRY_TO_CTX.get(interval, "1h")
-            warm = v41.CONTEXT_WARMUP_DAYS.get(ctx, 12)
+            print(f"V44 | {symbol} {interval}")
 
-            print(
-                f"\n{symbol} {interval} | "
-                f"reconstruction..."
+            entry,L,cands,folds,holdout=load_pair(
+                symbol,interval,args.days
             )
 
-            entry = v41.to_frame(
-                v41.fetch_vision(
-                    symbol, interval, start_ms, end_ms
-                )
-            )
-
-            h1 = v41.to_frame(
-                v41.fetch_vision(
-                    symbol,
-                    ctx,
-                    start_ms - warm * 86_400_000,
-                    end_ms
-                )
-            )
-
-            if entry.empty or h1.empty:
-                print("  DONNÉES ABSENTES")
-                continue
-
-            entry = entry[
-                entry.time >= start_ms
-            ].reset_index(drop=True)
-
-            L, candidates = v41.make_candidates(
-                entry, h1, ctx
-            )
-
-            folds, holdout_start = v41.make_folds(
-                len(entry), interval
-            )
-
-            print(
-                f"  candles={len(entry)} "
-                f"folds={len(folds)} "
-                f"candidates={len(candidates)}"
-            )
-
-            for _, row in pair.iterrows():
-
-                fi = int(row["fold"])
-
-                if fi < 1 or fi > len(folds):
+            for _,r in q.iterrows():
+                fi=int(r.fold)
+                if fi<1 or fi>len(folds):
+                    print(f"  F{fi} ignoré")
                     continue
 
-                tr0, tr1, te0, te1 = folds[fi - 1]
+                tr0,tr1,te0,te1=folds[fi-1]
 
-                cand_i = int(row["candidate"])
-                cand = candidates[cand_i]
+                ci=int(r.candidate)
+                if ci<0 or ci>=len(cands):
+                    print(f"  F{fi} candidate invalide")
+                    continue
 
-                trades = v41.simulate(
-                    L,
-                    cand.signal,
-                    float(row["tp"]),
-                    float(row["sl"]),
-                    int(row["hold"]),
-                    row["profile"],
-                    v41.SLIP.get(
-                        symbol, v41.DEFAULT_SLIP
-                    )
+                cand=cands[ci]
+
+                trades=replay(
+                    L,cand.signal,
+                    float(r.tp),float(r.sl),int(r.hold),
+                    str(r.profile),
+                    v41.SLIP.get(symbol,v41.DEFAULT_SLIP)
                 )
 
-                trades = v41.inside(
-                    trades, te0, te1
-                )
+                trades=v41.inside(trades,te0,te1)
 
-                base = trade_rows(
-                    L, trades, entry
-                )
-
-                for x in base:
-                    x.update({
-                        "symbol": symbol,
-                        "interval": interval,
-                        "fold": fi,
-                        "signal": row["signal"],
-                        "regime": row["regime"],
-                        "profile": row["profile"],
-                        "tp": row["tp"],
-                        "sl": row["sl"],
-                        "hold": row["hold"],
-                        "train_n": row["train_n"],
-                        "train_mean": row["train_mean"],
-                        "train_pf": row["train_pf"],
-                        "test_mean_fold": row["test_mean"],
-                        "edge_vs_random": (
-                            row["edge_vs_random"]
-                            if "edge_vs_random" in row
-                            else np.nan
-                        ),
+                for z in trades:
+                    z.update({
+                        "symbol":symbol,
+                        "interval":interval,
+                        "fold":fi,
+                        "candidate":ci,
+                        "signal":r.signal,
+                        "regime":r.regime,
+                        "profile":r.profile,
+                        "tp_mult":r.tp,
+                        "sl_mult":r.sl,
+                        "hold":r.hold,
+                        "train_n":r.train_n,
+                        "train_mean":r.train_mean,
+                        "train_pf":r.train_pf,
+                        "fold_test_mean":r.test_mean,
+                        "fold_random_mean":r.bench_random_mean,
+                        "fold_edge_random":r.edge_vs_random,
                     })
+                    rows.append(z)
 
-                all_trades.extend(base)
+                print(
+                    f"  F{fi} | {r.signal} | {r.regime} | "
+                    f"{r.profile} | trades={len(trades)}"
+                )
 
-            print(
-                f"  trades cumulés={len(all_trades)}"
-            )
+    if not rows:
+        raise SystemExit("Aucun trade OOS.")
 
-    if not all_trades:
-        raise SystemExit("Aucun trade OOS reconstruit.")
+    df=pd.DataFrame(rows)
 
-    T = pd.DataFrame(all_trades)
+    for c in ("signal_time","entry_time","exit_time"):
+        df[c]=pd.to_datetime(df[c],unit="ms",utc=True)
 
-    T["hour_utc"] = T["entry_time"].dt.hour
-    T["weekday"] = T["entry_time"].dt.day_name()
+    cols=[
+        "symbol","interval","fold","candidate","signal","regime","profile",
+        "tp_mult","sl_mult","hold",
+        "signal_time","entry_time","exit_time","side",
+        "entry_price","exit_price","tp_price","sl_price",
+        "gross","net","entry_fee","exit_fee",
+        "exit_reason","duration_bars","mfe","mae",
+        "train_n","train_mean","train_pf",
+        "fold_test_mean","fold_random_mean","fold_edge_random"
+    ]
+    df=df[cols]
+    df.to_csv(TRADES,index=False)
 
-    # --------------------------------------------------------
-    # TRADE LEVEL
-    # --------------------------------------------------------
+    def agg(cols,name):
+        x=df.groupby(cols).agg(
+            trades=("net","size"),
+            mean_net=("net","mean"),
+            mean_gross=("gross","mean"),
+            median_net=("net","median"),
+            win=("net",lambda x:(x>0).mean()),
+            mfe=("mfe","mean"),
+            mae=("mae","mean"),
+            duration=("duration_bars","mean")
+        ).reset_index()
+        x.to_csv(OUT/name,index=False)
 
-    T.to_csv(
-        R / "v44_trades_oos.csv",
-        index=False
-    )
+    agg(["symbol","interval"],"v44_symbol_interval.csv")
+    agg(["side"],"v44_long_short.csv")
+    agg(["exit_reason"],"v44_exit_analysis.csv")
+    agg(["signal"],"v44_signal.csv")
+    agg(["regime"],"v44_regime.csv")
+    agg(["profile"],"v44_profile.csv")
+    agg(["signal","side"],"v44_signal_side.csv")
+    agg(["signal","exit_reason"],"v44_signal_exit.csv")
+    agg(["fold"],"v44_fold.csv")
+    agg(["duration_bars"],"v44_duration.csv")
 
-    # --------------------------------------------------------
-    # LONG / SHORT
-    # --------------------------------------------------------
-
-    analyse(
-        T, ["side"]
-    ).to_csv(
-        R / "v44_long_short.csv",
-        index=False
-    )
-
-    # --------------------------------------------------------
-    # SORTIES
-    # --------------------------------------------------------
-
-    analyse(
-        T, ["exit"]
-    ).to_csv(
-        R / "v44_exit_analysis.csv",
-        index=False
-    )
-
-    # --------------------------------------------------------
-    # DURÉE
-    # --------------------------------------------------------
-
-    T["duration_bucket"] = pd.cut(
-        T["duration_hours"],
-        [-1, 0.5, 1, 2, 4, 8, 24, 999999],
-        labels=[
-            "<=0.5h",
-            "0.5-1h",
-            "1-2h",
-            "2-4h",
-            "4-8h",
-            "8-24h",
-            ">24h"
-        ]
-    )
-
-    analyse(
-        T, ["duration_bucket"]
-    ).to_csv(
-        R / "v44_duration.csv",
-        index=False
-    )
-
-    # --------------------------------------------------------
-    # MFE / MAE
-    # --------------------------------------------------------
-
-    analyse(
-        T, ["symbol", "interval"]
-    ).to_csv(
-        R / "v44_mae_mfe.csv",
-        index=False
-    )
-
-    # --------------------------------------------------------
-    # HEURE
-    # --------------------------------------------------------
-
-    analyse(
-        T, ["hour_utc"]
-    ).to_csv(
-        R / "v44_hour.csv",
-        index=False
-    )
-
-    # --------------------------------------------------------
-    # RÉGIME
-    # --------------------------------------------------------
-
-    analyse(
-        T, ["regime"]
-    ).to_csv(
-        R / "v44_regime.csv",
-        index=False
-    )
-
-    # --------------------------------------------------------
-    # SIGNAL
-    # --------------------------------------------------------
-
-    analyse(
-        T, ["signal"]
-    ).to_csv(
-        R / "v44_signal.csv",
-        index=False
-    )
-
-    # --------------------------------------------------------
-    # SYMBOL / TF
-    # --------------------------------------------------------
-
-    analyse(
-        T, ["symbol", "interval"]
-    ).to_csv(
-        R / "v44_symbol_interval.csv",
-        index=False
-    )
-
-    # --------------------------------------------------------
-    # SIGNAL / SIDE
-    # --------------------------------------------------------
-
-    analyse(
-        T, ["signal", "side"]
-    ).to_csv(
-        R / "v44_signal_side.csv",
-        index=False
-    )
-
-    # --------------------------------------------------------
-    # SIGNAL / EXIT
-    # --------------------------------------------------------
-
-    analyse(
-        T, ["signal", "exit"]
-    ).to_csv(
-        R / "v44_signal_exit.csv",
-        index=False
-    )
-
-    # --------------------------------------------------------
-    # FOLD
-    # --------------------------------------------------------
-
-    analyse(
-        T, ["symbol", "interval", "fold"]
-    ).to_csv(
-        R / "v44_fold.csv",
-        index=False
-    )
-
-    # --------------------------------------------------------
-    # TRAIN -> TEST
-    # --------------------------------------------------------
-
-    decay = (
-        T.groupby(
-            ["symbol", "interval", "fold"],
-            dropna=False
-        )
-        .agg(
-            train_mean=("train_mean", "first"),
-            test_mean=("test_mean_fold", "first"),
-            train_n=("train_n", "first"),
-            edge=("edge_vs_random", "first"),
-            trades=("net", "count"),
-        )
-        .reset_index()
-    )
-
-    decay["decay"] = (
-        decay["test_mean"] -
-        decay["train_mean"]
-    )
-
-    decay.to_csv(
-        R / "v44_train_test_decay.csv",
-        index=False
-    )
-
-    # --------------------------------------------------------
-    # RÉSUMÉ
-    # --------------------------------------------------------
-
-    net = T.net.to_numpy(float)
-    gross = T.gross.to_numpy(float)
-
-    wins = net[net > 0]
-    losses = net[net < 0]
-
-    pf = (
-        wins.sum() / abs(losses.sum())
-        if len(losses) else np.inf
-    )
-
-    eq = np.cumprod(1 + net)
-    peak = np.maximum.accumulate(eq)
-    dd = np.min(eq / peak - 1)
-
-    side = analyse(T, ["side"])
-    exits = analyse(T, ["exit"])
-
-    report = [
-        "# SCALP LAB V4.4 — TRADE LEVEL FORENSICS",
+    summary=[]
+    summary += [
+        "# SCALP LAB V4.4 — TRADE FORENSICS",
         "",
-        "V4.4 reprend les stratégies sélectionnées par V4.1.",
+        f"- Trades OOS : {len(df)}",
+        f"- LONG : {(df.side=='LONG').sum()}",
+        f"- SHORT : {(df.side=='SHORT').sum()}",
+        f"- TP : {(df.exit_reason=='TP').sum()}",
+        f"- SL : {(df.exit_reason=='SL').sum()}",
+        f"- TIME : {(df.exit_reason=='TIME').sum()}",
         "",
-        "**Aucune nouvelle sélection n'est effectuée.**",
+        "## Global",
         "",
-        "Le FINAL HOLDOUT reste totalement hors analyse OOS.",
+        f"- mean net/trade : {df.net.mean():+.4%}",
+        f"- median net : {df.net.median():+.4%}",
+        f"- win rate : {(df.net>0).mean():.2%}",
+        f"- mean gross : {df.gross.mean():+.4%}",
+        f"- mean MFE : {df.mfe.mean():+.4%}",
+        f"- mean MAE : {df.mae.mean():+.4%}",
+        f"- mean duration : {df.duration_bars.mean():.2f} bars",
         "",
-        "## Global OOS",
+        "## Par côté",
         "",
-        f"- Trades : {len(T)}",
-        f"- Net moyen/trade : {pct(net.mean())}",
-        f"- Médiane : {pct(np.median(net))}",
-        f"- Gross moyen : {pct(gross.mean())}",
-        f"- Coût moyen : {pct((gross-net).mean())}",
-        f"- Win rate : {(net > 0).mean():.1%}",
-        f"- PF : {pf:.2f}",
-        f"- DD séquentiel : {pct(dd)}",
-        "",
-        "## LONG / SHORT",
-        "",
-        "| side | trades | mean | win | MFE | MAE |",
-        "|---|---:|---:|---:|---:|---:|",
     ]
 
-    for _, r in side.iterrows():
-        report.append(
-            f"| {r['side']} | {int(r['trades'])} | "
-            f"{pct(r['mean_net'])} | {r['win_rate']:.1%} | "
-            f"{pct(r['mean_mfe'])} | {pct(r['mean_mae'])} |"
+    for side,g in df.groupby("side"):
+        summary.append(
+            f"- **{side}** : n={len(g)}, "
+            f"mean={g.net.mean():+.4%}, "
+            f"win={(g.net>0).mean():.2%}, "
+            f"MFE={g.mfe.mean():+.4%}, "
+            f"MAE={g.mae.mean():+.4%}"
         )
 
-    report += [
+    summary += [
         "",
         "## Sorties",
         "",
-        "| sortie | trades | mean | win |",
-        "|---|---:|---:|---:|",
     ]
 
-    for _, r in exits.iterrows():
-        report.append(
-            f"| {r['exit']} | {int(r['trades'])} | "
-            f"{pct(r['mean_net'])} | {r['win_rate']:.1%} |"
+    for reason,g in df.groupby("exit_reason"):
+        summary.append(
+            f"- **{reason}** : n={len(g)}, "
+            f"mean={g.net.mean():+.4%}, "
+            f"win={(g.net>0).mean():.2%}"
         )
 
-    report += [
+    summary += [
         "",
-        "## Diagnostics",
+        "## Important",
         "",
-        f"- Symboles : {T.symbol.nunique()}",
-        f"- Intervalles : {T.interval.nunique()}",
-        f"- Folds OOS observés : {T.fold.nunique()}",
-        f"- Signaux : {T.signal.nunique()}",
-        "",
-        "## FINAL HOLDOUT",
-        "",
-        "Le holdout n'est pas utilisé pour cette analyse.",
-        "Les 6 lignes FINAL de V4.1 restent intactes.",
-        "",
-        "## Fichiers",
-        "",
-        "- v44_trades_oos.csv",
-        "- v44_long_short.csv",
-        "- v44_exit_analysis.csv",
-        "- v44_duration.csv",
-        "- v44_mae_mfe.csv",
-        "- v44_hour.csv",
-        "- v44_regime.csv",
-        "- v44_signal.csv",
-        "- v44_symbol_interval.csv",
-        "- v44_signal_side.csv",
-        "- v44_signal_exit.csv",
-        "- v44_fold.csv",
-        "- v44_train_test_decay.csv",
-        "",
-        f"Temps : {(time.time()-t0):.1f}s",
+        "- Analyse strictement OOS.",
+        "- FINAL HOLDOUT volontairement exclu.",
+        "- Les prix et coûts sont rejoués avec les règles exactes de V4.1.",
+        "- TP/SL conserve la priorité SL de V4.1 en cas de conflit intrabougie.",
+        "- Aucun signal, indicateur ou paramètre supplémentaire n'est introduit.",
+        ""
     ]
 
-    (R / "summary_v44.md").write_text(
-        "\n".join(report) + "\n",
-        encoding="utf-8"
+    (OUT/"summary_v44.md").write_text(
+        "\n".join(summary),encoding="utf-8"
     )
 
     print("")
-    print("=" * 72)
-    print("V4.4 TERMINÉE")
-    print("=" * 72)
-    print(f"TRADES OOS : {len(T)}")
-    print(f"MEAN       : {pct(net.mean())}")
-    print(f"WIN RATE   : {(net > 0).mean():.1%}")
-    print(f"PF         : {pf:.2f}")
-    print(f"DD         : {pct(dd)}")
-    print("=" * 72)
+    print("="*55)
+    print("V44 | TERMINÉ")
+    print(f"TRADES {len(df)}")
+    print("FINAL HOLDOUT EXCLU")
+    print("results/v44_trades_oos.csv")
+    print("results/summary_v44.md")
+    print("="*55)
 
 
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
