@@ -1,47 +1,15 @@
-import os,json,urllib.request,urllib.parse
+import os,json,zipfile,io,urllib.request
 from datetime import datetime,timezone,timedelta
 
 STATE="state/live_v4386.json"
-
-HOSTS=[
- "fapi.binance.com",
- "fapi1.binance.com",
- "fapi2.binance.com",
- "fapi3.binance.com",
- "fapi4.binance.com"
-]
+BASE="https://data.binance.vision/data/futures/um/daily/klines/SOLUSDT/1h"
 
 TARGETS=[
- "2026-10-01T00:00:00+00:00",
- "2026-10-01T06:00:00+00:00",
- "2026-10-01T12:00:00+00:00",
- "2026-10-01T13:00:00+00:00"
+"2026-10-01T00:00:00+00:00",
+"2026-10-01T06:00:00+00:00",
+"2026-10-01T12:00:00+00:00",
+"2026-10-01T13:00:00+00:00"
 ]
-
-def get(host,q):
-    url=f"https://{host}/fapi/v1/klines?{q}"
-    try:
-        r=urllib.request.urlopen(
-            urllib.request.Request(
-                url,headers={"User-Agent":"Mozilla/5.0"}
-            ),timeout=15
-        ).read()
-
-        if not r:
-            return None,"EMPTY"
-
-        try:
-            x=json.loads(r)
-        except Exception:
-            return None,"NON_JSON"
-
-        if not isinstance(x,list):
-            return None,"BAD_JSON"
-
-        return x,None
-
-    except Exception as e:
-        return None,type(e).__name__
 
 def main():
     print("V52 | SOLUSDT GAP REPAIR")
@@ -52,50 +20,47 @@ def main():
     candles=s.setdefault("candles",[])
     by={x["time"]:x for x in candles if x.get("time")}
 
-    a=datetime.fromisoformat(TARGETS[0])
-    b=datetime.fromisoformat(TARGETS[-1])+timedelta(hours=1)
+    day="2026-10-01"
+    url=f"{BASE}/SOLUSDT-1h-{day}.zip"
 
-    q=urllib.parse.urlencode({
-        "symbol":"SOLUSDT",
-        "interval":"1h",
-        "startTime":int(a.timestamp()*1000),
-        "endTime":int(b.timestamp()*1000),
-        "limit":10
-    })
+    print("DOWNLOAD",day)
 
-    data=None
+    try:
+        data=urllib.request.urlopen(url,timeout=30).read()
+    except Exception as e:
+        print("ARCHIVE NOT AVAILABLE")
+        print(type(e).__name__)
+        print("STATE NOT MODIFIED")
+        return
 
-    for host in HOSTS:
-        print("TRY",host)
-
-        data,err=get(host,q)
-
-        if data is not None:
-            print("OK",host,"KLINES",len(data))
-            break
-
-        print("FAIL",host,err)
-
-    if data is None:
-        print("NO USABLE BINANCE ENDPOINT")
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            raw=z.read(z.namelist()[0]).decode()
+    except Exception as e:
+        print("ARCHIVE ERROR",type(e).__name__)
         print("STATE NOT MODIFIED")
         raise SystemExit(1)
 
-    added=updated=0
+    found={}
 
-    for p in data:
+    for line in raw.splitlines():
+        p=line.split(",")
+
+        if len(p)<9 or p[0].lower()=="open_time":
+            continue
+
         try:
-            k=datetime.fromtimestamp(
+            t=datetime.fromtimestamp(
                 int(p[0])/1000,timezone.utc
             ).isoformat()
         except Exception:
             continue
 
-        if k not in TARGETS:
+        if t not in TARGETS:
             continue
 
-        x={
-            "time":k,
+        found[t]={
+            "time":t,
             "open":float(p[1]),
             "high":float(p[2]),
             "low":float(p[3]),
@@ -104,6 +69,23 @@ def main():
             "trades":int(p[8]),
             "closed":True
         }
+
+    print("FOUND",len(found),"/",len(TARGETS))
+
+    missing=[x for x in TARGETS if x not in found]
+
+    for x in missing:
+        print("MISSING",x)
+
+    if missing:
+        print("REPAIR INCOMPLETE")
+        print("STATE NOT MODIFIED")
+        raise SystemExit(1)
+
+    added=updated=0
+
+    for k in TARGETS:
+        x=found[k]
 
         if k in by:
             by[k].update(x)
@@ -116,17 +98,15 @@ def main():
         print("REPAIRED",k,x["close"])
 
     candles.sort(key=lambda x:x["time"])
-    s["candles"]=candles[-5000:]
+    new_candles=candles[-5000:]
 
     closed=sorted(
-        [x for x in candles if x.get("closed")],
+        [x for x in new_candles if x.get("closed")],
         key=lambda x:x["time"]
     )
 
-    times={x["time"] for x in closed}
-    missing=[x for x in TARGETS if x not in times]
-
     last20=closed[-20:]
+
     continuous20=(
         len(last20)==20 and all(
             datetime.fromisoformat(last20[i]["time"])-
@@ -139,21 +119,17 @@ def main():
     print("ADDED",added)
     print("UPDATED",updated)
     print("CLOSED",len(closed))
-    print("MISSING",len(missing))
-
-    for x in missing:
-        print("MISSING",x)
-
     print("LAST",closed[-1]["time"])
     print("CONTINUOUS20",continuous20)
 
-    if missing:
-        print("REPAIR INCOMPLETE")
+    if not continuous20:
+        print("CONTINUITY CHECK FAILED")
         print("STATE NOT MODIFIED")
         raise SystemExit(1)
 
+    s["candles"]=new_candles
     s["last_closed"]=closed[-1]["time"]
-    s["continuous20"]=continuous20
+    s["continuous20"]=True
 
     with open(STATE+".tmp","w") as f:
         json.dump(s,f,indent=2)
