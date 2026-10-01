@@ -2,18 +2,17 @@ import os,json,urllib.request,urllib.parse
 from datetime import datetime,timezone,timedelta
 
 STATE="state/live_v4386.json"
+API="https://fapi.binance.com/fapi/v1/klines"
 
 TARGETS=[
-    "2026-10-01T00:00:00+00:00",
-    "2026-10-01T06:00:00+00:00",
-    "2026-10-01T12:00:00+00:00",
-    "2026-10-01T13:00:00+00:00"
+"2026-10-01T00:00:00+00:00",
+"2026-10-01T06:00:00+00:00",
+"2026-10-01T12:00:00+00:00",
+"2026-10-01T13:00:00+00:00"
 ]
 
-API="https://data-api.binance.vision/fapi/v1/klines"
-
 def main():
-    print("V52 | SOLUSDT GAP REPAIR API")
+    print("V52 | SOLUSDT GAP REPAIR")
 
     with open(STATE) as f:
         s=json.load(f)
@@ -27,7 +26,7 @@ def main():
         timedelta(hours=1)
     ).timestamp()*1000)
 
-    params=urllib.parse.urlencode({
+    q=urllib.parse.urlencode({
         "symbol":"SOLUSDT",
         "interval":"1h",
         "startTime":start,
@@ -35,12 +34,11 @@ def main():
         "limit":10
     })
 
-    url=f"{API}?{params}"
+    url=f"{API}?{q}"
     print("REQUEST",url)
 
     req=urllib.request.Request(
-        url,
-        headers={"User-Agent":"Mozilla/5.0"}
+        url,headers={"User-Agent":"Mozilla/5.0"}
     )
 
     data=json.loads(
@@ -52,11 +50,9 @@ def main():
     added=updated=0
 
     for p in data:
-        t=datetime.fromtimestamp(
-            int(p[0])/1000,
-            timezone.utc
-        )
-        k=t.isoformat()
+        k=datetime.fromtimestamp(
+            int(p[0])/1000,timezone.utc
+        ).isoformat()
 
         if k not in TARGETS:
             continue
@@ -103,29 +99,28 @@ def main():
         )
     )
 
-    s["last_closed"]=closed[-1]["time"] if closed else None
-    s["continuous20"]=continuous20
-
     print("ADDED",added)
     print("UPDATED",updated)
     print("CLOSED",len(closed))
-    print("REMAINING_MISSING",len(missing))
+    print("MISSING",len(missing))
 
     for x in missing:
         print("MISSING",x)
 
-    print("LAST",s["last_closed"])
+    print("LAST",closed[-1]["time"])
     print("CONTINUOUS20",continuous20)
 
     if missing:
         print("REPAIR INCOMPLETE")
         return
 
+    s["last_closed"]=closed[-1]["time"]
+    s["continuous20"]=continuous20
+
     with open(STATE+".tmp","w") as f:
         json.dump(s,f,indent=2)
 
     os.replace(STATE+".tmp",STATE)
-
     print("STATE UPDATED")
     print("REPAIR COMPLETE")
 
