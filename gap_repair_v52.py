@@ -1,19 +1,19 @@
-import os,json,zipfile,io,urllib.request
+import os,json,urllib.request,urllib.parse
 from datetime import datetime,timezone,timedelta
 
 STATE="state/live_v4386.json"
-DAY=datetime(2026,10,1,tzinfo=timezone.utc)
-TARGETS={
+
+TARGETS=[
     "2026-10-01T00:00:00+00:00",
     "2026-10-01T06:00:00+00:00",
     "2026-10-01T12:00:00+00:00",
     "2026-10-01T13:00:00+00:00"
-}
-BASE="https://data.binance.vision/data/futures/um/daily/klines/SOLUSDT/1h"
+]
+
+API="https://data-api.binance.vision/fapi/v1/klines"
 
 def main():
-    print("V52 | SOLUSDT GAP REPAIR")
-    print("TARGETS",len(TARGETS))
+    print("V52 | SOLUSDT GAP REPAIR API")
 
     with open(STATE) as f:
         s=json.load(f)
@@ -21,26 +21,41 @@ def main():
     candles=s.setdefault("candles",[])
     by={x["time"]:x for x in candles if x.get("time")}
 
-    url=f"{BASE}/SOLUSDT-1h-{DAY.date()}.zip"
-    print("DOWNLOAD",DAY.date())
+    start=int(datetime.fromisoformat(TARGETS[0]).timestamp()*1000)
+    end=int((
+        datetime.fromisoformat(TARGETS[-1])+
+        timedelta(hours=1)
+    ).timestamp()*1000)
 
-    data=urllib.request.urlopen(url,timeout=30).read()
+    params=urllib.parse.urlencode({
+        "symbol":"SOLUSDT",
+        "interval":"1h",
+        "startTime":start,
+        "endTime":end,
+        "limit":10
+    })
 
-    with zipfile.ZipFile(io.BytesIO(data)) as z:
-        raw=z.read(z.namelist()[0]).decode()
+    url=f"{API}?{params}"
+    print("REQUEST",url)
+
+    req=urllib.request.Request(
+        url,
+        headers={"User-Agent":"Mozilla/5.0"}
+    )
+
+    data=json.loads(
+        urllib.request.urlopen(req,timeout=30).read()
+    )
+
+    print("KLINES",len(data))
 
     added=updated=0
 
-    for line in raw.splitlines():
-        p=line.split(",")
-        if len(p)<11 or p[0].lower()=="open_time":
-            continue
-
-        try:
-            t=datetime.fromtimestamp(int(p[0])/1000,timezone.utc)
-        except:
-            continue
-
+    for p in data:
+        t=datetime.fromtimestamp(
+            int(p[0])/1000,
+            timezone.utc
+        )
         k=t.isoformat()
 
         if k not in TARGETS:
@@ -65,6 +80,8 @@ def main():
             by[k]=x
             added+=1
 
+        print("REPAIRED",k,x["close"])
+
     candles.sort(key=lambda x:x["time"])
     s["candles"]=candles[-5000:]
 
@@ -73,18 +90,18 @@ def main():
         key=lambda x:x["time"]
     )
 
-    last20=closed[-20:]
-    continuous20=len(last20)==20 and all(
-        datetime.fromisoformat(last20[i]["time"])-
-        datetime.fromisoformat(last20[i-1]["time"])
-        ==timedelta(hours=1)
-        for i in range(1,20)
-    )
+    times={x["time"] for x in closed}
+    missing=[x for x in TARGETS if x not in times]
 
-    missing=[
-        x for x in TARGETS
-        if x not in {c["time"] for c in closed}
-    ]
+    last20=closed[-20:]
+    continuous20=(
+        len(last20)==20 and all(
+            datetime.fromisoformat(last20[i]["time"])-
+            datetime.fromisoformat(last20[i-1]["time"])
+            ==timedelta(hours=1)
+            for i in range(1,20)
+        )
+    )
 
     s["last_closed"]=closed[-1]["time"] if closed else None
     s["continuous20"]=continuous20
@@ -100,11 +117,17 @@ def main():
     print("LAST",s["last_closed"])
     print("CONTINUOUS20",continuous20)
 
+    if missing:
+        print("REPAIR INCOMPLETE")
+        return
+
     with open(STATE+".tmp","w") as f:
         json.dump(s,f,indent=2)
 
     os.replace(STATE+".tmp",STATE)
+
     print("STATE UPDATED")
+    print("REPAIR COMPLETE")
 
 if __name__=="__main__":
     main()
