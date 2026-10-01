@@ -29,7 +29,7 @@ jobs:
         run: |
           python -u research_v41.py \
             --symbols "BTCUSDT,ETHUSDT,SOLUSDT" \
-            --intervals "1h" \
+            --intervals "5m,15m" \
             --days "730" \
             --capital "100" \
             --mc-runs "5000"
