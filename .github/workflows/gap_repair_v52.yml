@@ -2,6 +2,8 @@ name: V5.2 Gap Repair
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "20 3 * * *"
 
 permissions:
   contents: write
