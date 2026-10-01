@@ -998,9 +998,19 @@
       "volume": 328809.86,
       "trades": 54560,
       "closed": true
+    },
+    {
+      "time": "2026-09-30T23:00:00+00:00",
+      "open": 118.08,
+      "high": 118.5,
+      "low": 117.93,
+      "close": 118.05,
+      "volume": 386455.91,
+      "trades": 61749,
+      "closed": true
     }
   ],
-  "last_closed": "2026-09-30T22:00:00+00:00",
+  "last_closed": "2026-09-30T23:00:00+00:00",
   "warmup": true,
   "updated": "2026-09-30T05:35:25.751784+00:00",
   "live_trades": 20654,
