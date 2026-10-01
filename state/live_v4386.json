@@ -1130,6 +1130,16 @@
       "closed": true
     },
     {
+      "time": "2026-10-01T00:00:00+00:00",
+      "open": 118.05,
+      "high": 118.19,
+      "low": 117.82,
+      "close": 117.93,
+      "volume": 308853.94,
+      "trades": 45806,
+      "closed": true
+    },
+    {
       "time": "2026-10-01T01:00:00+00:00",
       "open": 117.93,
       "high": 118.43,
@@ -1180,6 +1190,16 @@
       "closed": true
     },
     {
+      "time": "2026-10-01T06:00:00+00:00",
+      "open": 119.37,
+      "high": 119.58,
+      "low": 119.0,
+      "close": 119.19,
+      "volume": 445915.18,
+      "trades": 61141,
+      "closed": true
+    },
+    {
       "time": "2026-10-01T07:00:00+00:00",
       "open": 119.18,
       "high": 119.37,
@@ -1227,6 +1247,26 @@
       "close": 117.91,
       "volume": 412544.1,
       "trades": 63335,
+      "closed": true
+    },
+    {
+      "time": "2026-10-01T12:00:00+00:00",
+      "open": 117.91,
+      "high": 118.0,
+      "low": 117.1,
+      "close": 117.29,
+      "volume": 637945.81,
+      "trades": 74635,
+      "closed": true
+    },
+    {
+      "time": "2026-10-01T13:00:00+00:00",
+      "open": 117.29,
+      "high": 118.06,
+      "low": 116.63,
+      "close": 117.91,
+      "volume": 1099499.9,
+      "trades": 156787,
       "closed": true
     },
     {
@@ -1283,7 +1323,7 @@
     "closed": false
   },
   "gap_to_live_hours": 13,
-  "continuous20": false,
+  "continuous20": true,
   "live_candle": null,
   "backfill_pending": [],
   "backfill_last_closed": "2026-09-30T23:00:00+00:00",
