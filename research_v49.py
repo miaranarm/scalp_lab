@@ -2,17 +2,8 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-OUT=Path("results")
-SRC=OUT/"v48_trade_paths.csv"
-d=pd.read_csv(SRC)
-
-need=["symbol","interval","signal","regime","side","exit_reason",
-      "path_class","net","mfe","mae","duration_bars",
-      "tp50_before_sl50","sl50_before_tp50",
-      "tp50_time","tp75_time","tp100_time",
-      "sl50_time","sl75_time","sl100_time"]
-miss=[c for c in need if c not in d]
-if miss: raise SystemExit("COLONNES ABSENTES: "+",".join(miss))
+O=Path("results")
+d=pd.read_csv(O/"v48_trade_paths.csv")
 
 for c in ["net","mfe","mae","duration_bars"]:
     d[c]=pd.to_numeric(d[c],errors="coerce")
@@ -20,149 +11,89 @@ for c in ["net","mfe","mae","duration_bars"]:
 for c in ["tp50_before_sl50","sl50_before_tp50"]:
     d[c]=d[c].astype(bool)
 
-def pct(x):
-    return f"{100*x:.3f}%"
-
-def agg(cols):
+def A(cols):
     return d.groupby(cols,observed=True).agg(
-        trades=("net","size"),
-        mean_net=("net","mean"),
-        median_net=("net","median"),
-        win_rate=("net",lambda x:(x>0).mean()),
-        mean_mfe=("mfe","mean"),
-        mean_mae=("mae","mean"),
-        mean_duration=("duration_bars","mean"),
+        n=("net","size"),
+        net=("net","mean"),
+        win=("net",lambda x:(x>0).mean()),
+        mfe=("mfe","mean"),
+        mae=("mae","mean"),
         tp=("exit_reason",lambda x:(x=="TP").sum()),
         sl=("exit_reason",lambda x:(x=="SL").sum()),
         time=("exit_reason",lambda x:(x=="TIME").sum()),
-        tp50_first=("tp50_before_sl50","sum"),
-        sl50_first=("sl50_before_tp50","sum")
+        tp50=("tp50_before_sl50","sum"),
+        sl50=("sl50_before_tp50","sum")
     ).reset_index()
 
-def save(cols,name):
-    x=agg(cols)
-    x.to_csv(OUT/name,index=False)
+def S(cols,name):
+    x=A(cols)
+    x.to_csv(O/name,index=False)
     return x
 
-print("V4.9 | PATH x EDGE FORENSICS")
+print("V4.9.1 | PATH x EDGE")
 print("TRADES",len(d))
 
-# 1. Classes globales
-p=save(["path_class"],"v49_path_edge.csv")
+p=S(["path_class"],"v49_path_edge.csv")
+e=S(["exit_reason","path_class"],"v49_exit_path_edge.csv")
+s=S(["signal","path_class"],"v49_signal_path_edge.csv")
+m=S(["symbol","interval","path_class"],"v49_market_path_edge.csv")
+r=S(["regime","path_class"],"v49_regime_path_edge.csv")
+sr=S(["signal","regime","path_class"],"v49_signal_regime_path.csv")
+z=S(["side","path_class"],"v49_side_path_edge.csv")
 
-# 2. Sortie x chemin
-e=save(["exit_reason","path_class"],"v49_exit_path_edge.csv")
-
-# 3. Signal x chemin
-s=save(["signal","path_class"],"v49_signal_path_edge.csv")
-
-# 4. Marché x chemin
-m=save(["symbol","interval","path_class"],"v49_market_path_edge.csv")
-
-# 5. Régime x chemin
-r=save(["regime","path_class"],"v49_regime_path_edge.csv")
-
-# 6. Signal x régime x chemin
-sr=save(["signal","regime","path_class"],
-        "v49_signal_regime_path.csv")
-
-# 7. Côté x chemin
-side=save(["side","path_class"],"v49_side_path_edge.csv")
-
-# Classe économique simplifiée
-d["edge_class"]=np.select([
-    (d.path_class=="FAVORABLE_PATH")&(d.net>0),
-    (d.path_class=="FAVORABLE_PATH")&(d.net<=0),
-    (d.path_class=="EARLY_FAVORABLE")&(d.net>0),
-    (d.path_class=="EARLY_ADVERSE")&(d.net>0),
-    (d.path_class=="EARLY_ADVERSE")&(d.net<=0)
-],[
-    "FAVORABLE_WIN",
-    "FAVORABLE_LOSS",
-    "EARLY_FAVORABLE_WIN",
-    "EARLY_ADVERSE_WIN",
-    "EARLY_ADVERSE_LOSS"
-],"OTHER")
-
-ec=agg(["edge_class"])
-ec.to_csv(OUT/"v49_edge_class.csv",index=False)
-
-# Global
-g={
+g=pd.DataFrame([{
     "trades":len(d),
-    "mean_net":d.net.mean(),
-    "median_net":d.net.median(),
-    "win_rate":(d.net>0).mean(),
-    "mean_mfe":d.mfe.mean(),
-    "mean_mae":d.mae.mean(),
-    "tp50_first":int(d.tp50_before_sl50.sum()),
-    "sl50_first":int(d.sl50_before_tp50.sum()),
-    "tp50_first_pct":d.tp50_before_sl50.mean(),
-    "sl50_first_pct":d.sl50_before_tp50.mean()
-}
-pd.DataFrame([g]).to_csv(OUT/"v49_global.csv",index=False)
+    "net":d.net.mean(),
+    "win":(d.net>0).mean(),
+    "mfe":d.mfe.mean(),
+    "mae":d.mae.mean(),
+    "tp50_first":d.tp50_before_sl50.sum(),
+    "sl50_first":d.sl50_before_tp50.sum()
+}])
+g.to_csv(O/"v49_global.csv",index=False)
 
-# Résumé
+# compact summary
+def top(x,n=8):
+    x=x.sort_values("net",ascending=False).head(n)
+    for _,q in x.iterrows():
+        key=" | ".join(str(q[c]) for c in x.columns[:len(x.columns)-9])
+        print(f"{key} | n={int(q.n)} net={q.net:.3%} win={q.win:.1%}")
+
 lines=[
-"# SCALP LAB V4.9 — PATH × EDGE FORENSICS",
+"# V4.9.1 — PATH × EDGE",
+f"Trades OOS : {len(d)}",
+f"Net/trade : {d.net.mean():.3%}",
+f"Win rate : {d.net.gt(0).mean():.2%}",
+f"TP50 first : {d.tp50_before_sl50.sum()} ({d.tp50_before_sl50.mean():.2%})",
+f"SL50 first : {d.sl50_before_tp50.sum()} ({d.sl50_before_tp50.mean():.2%})",
 "",
-f"- Trades OOS : {len(d)}",
-"- FINAL HOLDOUT : exclu",
-"- Source : V4.8 trade paths",
-"- Stratégie V4.4 : inchangée",
-"- Aucun nouveau paramètre testé.",
-"",
-"## Global",
-"",
-f"- mean net/trade : {pct(d.net.mean())}",
-f"- median net : {pct(d.net.median())}",
-f"- win rate : {d.net.gt(0).mean():.2%}",
-f"- mean MFE : {pct(d.mfe.mean())}",
-f"- mean MAE : {pct(d.mae.mean())}",
-f"- TP50 avant SL50 : {d.tp50_before_sl50.sum()} ({d.tp50_before_sl50.mean():.2%})",
-f"- SL50 avant TP50 : {d.sl50_before_tp50.sum()} ({d.sl50_before_tp50.mean():.2%})",
-"",
-"## Path classes",
-"",
+"## Path",
 p.to_string(index=False),
 "",
-"## Exit × Path",
-"",
-e.to_string(index=False),
-"",
 "## Signal × Path",
-"",
 s.to_string(index=False),
 "",
 "## Market × Path",
-"",
 m.to_string(index=False),
 "",
 "## Regime × Path",
-"",
 r.to_string(index=False),
 "",
-"## Edge classes",
-"",
-ec.to_string(index=False),
-"",
-"## Méthode",
-"",
-"- Analyse strictement OOS.",
-"- FINAL HOLDOUT exclu.",
-"- Aucun recalcul de signal.",
-"- Aucun paramètre modifié.",
-"- Aucune nouvelle stratégie testée.",
-"- Les trajectoires viennent de V4.8.",
-"- L'objectif est d'isoler la source de l'edge et des pertes."
+"## Signal × Regime × Path",
+sr.to_string(index=False)
 ]
+(O/"summary_v49.md").write_text("\n".join(lines),encoding="utf-8")
 
-(OUT/"summary_v49.md").write_text("\n".join(lines),encoding="utf-8")
+print(f"NET {d.net.mean():.3%} | WIN {d.net.gt(0).mean():.2%}")
+print(f"TP50_FIRST {d.tp50_before_sl50.sum()} | SL50_FIRST {d.sl50_before_tp50.sum()}")
 
-print("===== V4.9 =====")
-print("TRADES",len(d))
-print("MEAN_NET",pct(d.net.mean()))
-print("WIN_RATE",f"{d.net.gt(0).mean():.2%}")
-print("TP50_FIRST",int(d.tp50_before_sl50.sum()))
-print("SL50_FIRST",int(d.sl50_before_tp50.sum()))
-print("V4.9 TERMINÉ")
+print("\nTOP SIGNAL/PATH")
+top(s)
+
+print("\nTOP MARKET/PATH")
+top(m)
+
+print("\nTOP REGIME/PATH")
+top(r)
+
+print("\nV4.9.1 TERMINÉ")
