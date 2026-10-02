@@ -1,0 +1,1 @@
+symbol,interval,fold,candidate,signal,regime,profile,tp_mult,sl_mult,hold,signal_time,entry_time,exit_time,side,entry_price,exit_price,tp_price,sl_price,gross,net,entry_fee,exit_fee,exit_reason,duration_bars,mfe,mae,train_n,train_mean,train_pf,fold_test_mean,fold_random_mean,fold_edge_random,side_name,exit,tp_target,reached_tp,missed_tp
