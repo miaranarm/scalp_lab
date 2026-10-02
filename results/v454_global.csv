@@ -1,2 +1,0 @@
-trades,tp,sl,time,mean_net,median_net,win_rate,mean_mfe,mean_mae,mean_tp_target,mean_tp_progress,reached_50,reached_75,reached_90,reached_100,missed_tp,missed_tp_rate
-2196,791,1213,192,-0.000940304841444095,-0.0028112414869263,0.40528233151183973,0.005030205270961409,-0.004736176559181628,0.7070173767542964,0.007345009961902566,0.0,0.0,0.0,0.0,0,0.0
