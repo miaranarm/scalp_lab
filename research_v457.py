@@ -11,20 +11,22 @@ print("V4.5.7 | MISSED TP FORENSICS")
 df = pd.read_csv(SRC)
 print("INPUT", len(df))
 
-# ---------- NORMALISATION ----------
-side = df["side"].astype(str).str.strip().str.upper()
-df["side_name"] = side.replace({
+# NORMALISATION
+s = df["side"].astype(str).str.strip().str.upper()
+df["side_name"] = s.replace({
     "1": "LONG", "+1": "LONG", "-1": "SHORT",
     "LONG": "LONG", "SHORT": "SHORT"
 })
 
 df["exit"] = df["exit_reason"].astype(str).str.strip().str.lower()
 
-for c in ["entry_price", "tp_price", "sl_price", "mfe", "mae",
-          "tp_mult", "sl_mult", "duration_bars"]:
+for c in [
+    "entry_price", "tp_price", "sl_price",
+    "mfe", "mae", "tp_mult", "sl_mult", "duration_bars"
+]:
     df[c] = pd.to_numeric(df[c], errors="coerce")
 
-# ---------- TP / SL DISTANCES ----------
+# TP / SL DISTANCES
 df["tp_dist"] = np.where(
     df["side_name"].eq("LONG"),
     df["tp_price"] / df["entry_price"] - 1,
@@ -44,28 +46,20 @@ df["tp_exit"] = df["exit"].eq("tp")
 df["sl_exit"] = df["exit"].eq("sl")
 df["time_exit"] = df["exit"].eq("time")
 
-# ---------- MISSED TP ----------
+# MISSED TP
 df["missed_tp"] = df["tp_reached"] & ~df["tp_exit"]
 
-# Important forensic distinction:
-# TP reached, SL NOT reached, but final exit was not TP.
 df["clean_missed_tp"] = (
     df["tp_reached"] &
     ~df["sl_reached"] &
     ~df["tp_exit"]
 )
 
-# Both excursion thresholds were reached somewhere
-# during the trade. This does NOT prove same-candle ordering.
 df["tp_sl_both_reached"] = df["tp_reached"] & df["sl_reached"]
-
-# TP reached and final exit was SL
 df["tp_then_sl_candidate"] = df["tp_reached"] & df["sl_exit"]
-
-# TP reached and final exit was TIME
 df["tp_then_time_candidate"] = df["tp_reached"] & df["time_exit"]
 
-# ---------- VALIDATION ----------
+# EXIT VALIDATION
 tp = int(df["tp_exit"].sum())
 sl = int(df["sl_exit"].sum())
 tm = int(df["time_exit"].sum())
@@ -75,18 +69,16 @@ if (tp, sl, tm) != (791, 1213, 192):
         f"EXIT CHECK FAILED: TP={tp} SL={sl} TIME={tm}"
     )
 
-missed = df[df["missed_tp"]].copy()
-
 print("EXIT CHECK PASS")
 print("TP", tp)
 print("SL", sl)
 print("TIME", tm)
 print("TP REACHED", int(df["tp_reached"].sum()))
-print("MISSED TP", len(missed))
+print("MISSED TP", int(df["missed_tp"].sum()))
 print("CLEAN MISSED TP", int(df["clean_missed_tp"].sum()))
 print("BOTH TP+SL", int(df["tp_sl_both_reached"].sum()))
 
-# ---------- CLASSIFICATION ----------
+# CLASSIFICATION
 def classify(r):
     if not r["missed_tp"]:
         return "NOT_MISSED"
@@ -110,10 +102,14 @@ def classify(r):
 
 df["forensic_class"] = df.apply(classify, axis=1)
 
-# ---------- DETAILED FILE ----------
+# IMPORTANT: AFTER forensic_class
+missed = df[df["missed_tp"]].copy()
+
+# DETAIL FILES
 cols = [
-    "symbol", "interval", "fold", "candidate", "signal", "regime",
-    "profile", "tp_mult", "sl_mult", "side_name",
+    "symbol", "interval", "fold", "candidate",
+    "signal", "regime", "profile",
+    "tp_mult", "sl_mult", "side_name",
     "signal_time", "entry_time", "exit_time",
     "entry_price", "tp_price", "sl_price", "exit_price",
     "tp_dist", "sl_dist", "mfe", "mae",
@@ -126,18 +122,15 @@ cols = [
 cols = [c for c in cols if c in df.columns]
 
 missed[cols].to_csv(
-    f"{OUT}/v457_missed_tp_forensics.csv",
-    index=False
+    f"{OUT}/v457_missed_tp_forensics.csv", index=False
 )
 
-# ---------- ALL TP-REACHED ----------
 df[df["tp_reached"]][cols].to_csv(
-    f"{OUT}/v457_all_tp_reached.csv",
-    index=False
+    f"{OUT}/v457_all_tp_reached.csv", index=False
 )
 
-# ---------- GLOBAL ----------
-global_row = pd.DataFrame([{
+# GLOBAL
+pd.DataFrame([{
     "trades": len(df),
     "tp_exits": tp,
     "sl_exits": sl,
@@ -148,17 +141,13 @@ global_row = pd.DataFrame([{
     "tp_sl_both_reached": int(df["tp_sl_both_reached"].sum()),
     "tp_then_sl": int(df["tp_then_sl_candidate"].sum()),
     "tp_then_time": int(df["tp_then_time_candidate"].sum())
-}])
-
-global_row.to_csv(
-    f"{OUT}/v457_global.csv",
-    index=False
+}]).to_csv(
+    f"{OUT}/v457_global.csv", index=False
 )
 
-# ---------- CLASSIFICATION ----------
-cls = (
-    df[df["missed_tp"]]
-    .groupby("forensic_class")
+# CLASSIFICATION
+(
+    missed.groupby("forensic_class")
     .agg(
         trades=("symbol", "size"),
         mean_net=("net", "mean"),
@@ -167,17 +156,12 @@ cls = (
         mean_mae=("mae", "mean")
     )
     .reset_index()
+    .to_csv(f"{OUT}/v457_classification.csv", index=False)
 )
 
-cls.to_csv(
-    f"{OUT}/v457_classification.csv",
-    index=False
-)
-
-# ---------- SYMBOL / INTERVAL ----------
-si = (
-    df[df["missed_tp"]]
-    .groupby(["symbol", "interval"])
+# SYMBOL / INTERVAL
+(
+    missed.groupby(["symbol", "interval"])
     .agg(
         missed_tp=("symbol", "size"),
         clean_missed_tp=("clean_missed_tp", "sum"),
@@ -187,17 +171,14 @@ si = (
         mean_mae=("mae", "mean")
     )
     .reset_index()
+    .to_csv(f"{OUT}/v457_symbol_interval.csv", index=False)
 )
 
-si.to_csv(
-    f"{OUT}/v457_symbol_interval.csv",
-    index=False
-)
-
-# ---------- STRATEGY ----------
-sg = (
-    df[df["missed_tp"]]
-    .groupby(["symbol", "interval", "signal", "regime", "profile"])
+# STRATEGY
+(
+    missed.groupby(
+        ["symbol", "interval", "signal", "regime", "profile"]
+    )
     .agg(
         missed_tp=("symbol", "size"),
         clean_missed_tp=("clean_missed_tp", "sum"),
@@ -207,15 +188,16 @@ sg = (
         mean_mae=("mae", "mean")
     )
     .reset_index()
+    .to_csv(f"{OUT}/v457_strategy.csv", index=False)
 )
 
-sg.to_csv(
-    f"{OUT}/v457_strategy.csv",
-    index=False
-)
+# SUMMARY
+def pct(x, n):
+    return 100 * x / n if n else 0
 
-# ---------- SUMMARY ----------
-pct = lambda x, n: 100 * x / n if n else 0
+reached = int(df["tp_reached"].sum())
+clean = int(df["clean_missed_tp"].sum())
+both = int(df["tp_sl_both_reached"].sum())
 
 summary = f"""# SCALP LAB V4.5.7 — MISSED TP FORENSICS
 
@@ -237,8 +219,8 @@ summary = f"""# SCALP LAB V4.5.7 — MISSED TP FORENSICS
 
 ## TP reached
 
-- TP atteint selon MFE : {int(df["tp_reached"].sum())}
-- Taux : {pct(int(df["tp_reached"].sum()), len(df)):.2f}%
+- TP atteint selon MFE : {reached}
+- Taux : {pct(reached, len(df)):.2f}%
 - TP réellement enregistré : {tp}
 
 ## Missed TP
@@ -248,48 +230,38 @@ summary = f"""# SCALP LAB V4.5.7 — MISSED TP FORENSICS
 
 ## Forensic classification
 
-- Clean missed TP : {int(df["clean_missed_tp"].sum())}
-- TP + SL tous deux atteints : {int(df["tp_sl_both_reached"].sum())}
+- Clean missed TP : {clean}
+- TP + SL tous deux atteints : {both}
 - TP atteint + sortie SL : {int(df["tp_then_sl_candidate"].sum())}
 - TP atteint + sortie TIME : {int(df["tp_then_time_candidate"].sum())}
 
-## Définition
-
-### CLEAN_MISSED_TP
+## CLEAN_MISSED_TP
 
 MFE >= TP
-ET
-MAE < SL
-ET
-sortie != TP.
+ET MAE < SL
+ET sortie != TP.
 
-C'est le sous-ensemble le plus intéressant :
-le trade a atteint son objectif TP selon le MFE sans atteindre
-le niveau SL selon le MAE.
+Le trade a donc atteint le TP selon son excursion
+maximale sans atteindre le SL selon son excursion adverse.
 
-### TP_SL_AMBIGUOUS
+## TP_SL_AMBIGUOUS
 
 MFE >= TP
-ET
-MAE >= SL.
+ET MAE >= SL.
 
-Cela signifie que les deux niveaux ont été touchés
-à un moment quelconque du trade.
+Les deux niveaux ont été atteints à un moment du trade.
+Avec OHLC/MFE/MAE, l'ordre intrabougie exact n'est pas reconstructible.
 
-Avec des données OHLC, cela ne permet pas de reconstruire
-l'ordre exact intrabougie.
-
-V4.1 applique la priorité SL dans cette ambiguïté.
+V4.1 conserve la priorité SL en cas d'ambiguïté intrabougie.
 
 ## Important
 
-MFE et MAE sont des excursions de trade.
-"TP + SL tous deux atteints" ne signifie donc pas
-nécessairement que TP et SL ont été touchés dans la même bougie.
+Cette analyse est strictement OOS.
+Elle ne modifie ni les signaux ni les paramètres V4.1.
 
-Cette analyse est volontairement conservative :
-elle identifie les cas nécessitant une analyse plus fine,
-sans modifier le moteur V4.1.
+MFE/MAE sont des excursions de trade :
+TP + SL atteints ne signifie pas nécessairement
+qu'ils ont été touchés dans la même bougie.
 
 ## Files
 
@@ -306,8 +278,8 @@ with open(f"{OUT}/summary_v457.md", "w", encoding="utf-8") as f:
 
 print("")
 print("===== V4.5.7 RESULT =====")
-print("TP REACHED", int(df["tp_reached"].sum()))
+print("TP REACHED", reached)
 print("MISSED TP", len(missed))
-print("CLEAN MISSED TP", int(df["clean_missed_tp"].sum()))
-print("TP+SL BOTH", int(df["tp_sl_both_reached"].sum()))
+print("CLEAN MISSED TP", clean)
+print("TP+SL BOTH", both)
 print("V4.5.7 TERMINÉ")
