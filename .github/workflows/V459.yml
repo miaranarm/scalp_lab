@@ -33,9 +33,13 @@ jobs:
         if: always()
         run: |
           echo "===== V4.5.9 ====="
-          cat results/summary_v459.md
+          if [ -f results/summary_v459.md ]; then
+            cat results/summary_v459.md
+          fi
           echo ""
-          cat results/v459_through_audit.csv
+          if [ -f results/v459_through_audit.csv ]; then
+            cat results/v459_through_audit.csv
+          fi
 
       - name: Commit
         if: success()
