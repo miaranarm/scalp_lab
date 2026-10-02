@@ -2,191 +2,125 @@ from pathlib import Path
 import pandas as pd,numpy as np
 
 O=Path("results")
-SRC=O/"v414_replay.csv"
-ORG=O/"v44_trades_oos.csv"
-
-x=pd.read_csv(SRC)
-o=pd.read_csv(ORG)
+R=O/"v414_replay.csv"
+T=O/"v44_trades_oos.csv"
 
 print("V4.16 | B1 ATTRIBUTION / SURVIVORSHIP")
 
-# -------------------------------------------------
-# VERIFICATION
-# -------------------------------------------------
+x=pd.read_csv(R)
+o=pd.read_csv(T)
+
+# -----------------------------
+# CHECK
+# -----------------------------
 
 need_o=[
     "symbol","interval","fold","signal","regime",
     "profile","side","entry_time","entry_price","net"
 ]
-
-miss=[c for c in need_o if c not in o.columns]
-if miss:
-    raise SystemExit(
-        "v44_trades_oos.csv COLONNES ABSENTES: "
-        +",".join(miss)
-    )
-
 need_x=[
     "mode","symbol","interval","fold","signal",
-    "regime","profile","net"
+    "regime","profile","side","net"
 ]
 
-miss=[c for c in need_x if c not in x.columns]
-if miss:
-    raise SystemExit(
-        "v414_replay.csv COLONNES ABSENTES: "
-        +",".join(miss)
-    )
+m=[c for c in need_o if c not in o]
+if m:
+    raise SystemExit("v44 COLONNES ABSENTES: "+",".join(m))
+
+m=[c for c in need_x if c not in x]
+if m:
+    raise SystemExit("v414 COLONNES ABSENTES: "+",".join(m))
 
 o["entry_time"]=pd.to_datetime(
     o["entry_time"],utc=True,errors="coerce"
 )
 
 if o["entry_time"].isna().any():
-    raise SystemExit("entry_time invalide dans v44_trades_oos.csv")
+    raise SystemExit("entry_time invalide")
 
-print("ORIGINAL OOS",len(o))
+print("ORIGINAL SOURCE",len(o))
 print("REPLAY",len(x))
 
-# -------------------------------------------------
-# IDENTIFIANT ORIGINAL
-# -------------------------------------------------
-#
-# v44_trades_oos contient l'entrée temporelle.
-# On crée un ID déterministe.
-#
-# -------------------------------------------------
+# -----------------------------
+# TRADE ID
+# -----------------------------
 
-idcols=[
-    "symbol","interval","fold","signal",
-    "regime","profile","side","entry_time"
-]
-
-o["trade_id"]=(
-    o["symbol"].astype(str)+"|"+
-    o["interval"].astype(str)+"|"+
-    o["fold"].astype(str)+"|"+
-    o["signal"].astype(str)+"|"+
-    o["regime"].astype(str)+"|"+
-    o["profile"].astype(str)+"|"+
-    o["side"].astype(str)+"|"+
-    o["entry_time"].astype(str)
-)
-
-if o["trade_id"].duplicated().any():
-    raise SystemExit(
-        "trade_id ORIGINAL non unique"
-    )
-
-# -------------------------------------------------
-# REPLAY V4.14
-# -------------------------------------------------
-#
-# v414_replay ne possède pas entry_time.
-# On utilise l'ordre d'apparition pour chaque
-# combinaison structurelle.
-#
-# IMPORTANT :
-# le replay V4.14 est construit directement en
-# itérant sur v44_trades_oos dans son ordre.
-#
-# On reconstruit donc le même rang.
-#
-# -------------------------------------------------
-
-basecols=[
+K=[
     "symbol","interval","fold","signal",
     "regime","profile","side"
 ]
 
-o["_rank"]=o.groupby(basecols).cumcount()
+o["_rank"]=o.groupby(K).cumcount()
 
 x["_rank"]=x.groupby(
-    ["mode"]+basecols
+    ["mode"]+K
 ).cumcount()
 
-# -------------------------------------------------
+o["trade_id"]=[
+    f"T{i:05d}" for i in range(len(o))
+]
+
+# -----------------------------
 # ORIGINAL REPLAY
-# -------------------------------------------------
-#
-# Le mode ORIGINAL du replay correspond aux
-# trades réellement rejoués.
-#
-# -------------------------------------------------
+# -----------------------------
 
-xr=x[x["mode"]=="ORIGINAL"].copy()
+orig=x[x["mode"]=="ORIGINAL"].copy()
 
-# Pour retrouver le trade original,
-# on apparie par dimensions + rang.
-#
-xr=xr.merge(
-    o[
-        basecols+
-        ["_rank","trade_id","entry_time",
-         "entry_price"]
-    ],
-    on=basecols+["_rank"],
+orig=orig.merge(
+    o[K+["_rank","trade_id","entry_time","entry_price"]],
+    on=K+["_rank"],
     how="left",
     validate="one_to_one"
 )
 
-if xr["trade_id"].isna().any():
-    raise SystemExit(
-        "Impossible d'apparier ORIGINAL avec v44_trades_oos"
-    )
+if orig["trade_id"].isna().any():
+    raise SystemExit("ORIGINAL non apparié")
 
-# -------------------------------------------------
-# B1 REPLAY
-# -------------------------------------------------
+orig=orig[
+    ["trade_id","net"]
+].rename(
+    columns={"net":"net_original"}
+)
+
+# -----------------------------
+# B1
+# -----------------------------
 
 b=x[x["mode"]!="ORIGINAL"].copy()
 
 b=b.merge(
-    o[
-        basecols+
-        ["_rank","trade_id","entry_time",
-         "entry_price"]
-    ],
-    on=basecols+["_rank"],
+    o[K+["_rank","trade_id","entry_time","entry_price"]],
+    on=K+["_rank"],
     how="left",
     validate="many_to_one"
 )
 
-matched=b["trade_id"].notna().sum()
-
-print("B1 MATCHED",matched)
-print("B1 UNMATCHED",len(b)-matched)
+print("B1 ROWS",len(b))
+print("B1 MATCHED",b["trade_id"].notna().sum())
 
 b=b[b["trade_id"].notna()].copy()
 
-# -------------------------------------------------
-# ORIGINAL NET
-# -------------------------------------------------
-
-orignet=xr[
-    ["trade_id","net"]
-].rename(
-    columns={"net":"net_original_replay"}
-)
-
 b=b.merge(
-    orignet,
+    orig,
     on="trade_id",
     how="left",
     validate="many_to_one"
 )
 
-if b["net_original_replay"].isna().any():
-    raise SystemExit(
-        "ORIGINAL replay manquant pour certains B1"
-    )
+if b["net_original"].isna().any():
+    raise SystemExit("ORIGINAL replay absent")
 
-# -------------------------------------------------
-# ATTRIBUTION
-# -------------------------------------------------
+# -----------------------------
+# DELTA
+# -----------------------------
 
-b["delta_net"]=
-b["net"]-b["net_original_replay"]
+b["delta_net"]=(
+    b["net"]-b["net_original"]
+)
+
+# -----------------------------
+# GLOBAL
+# -----------------------------
 
 rows=[]
 
@@ -197,193 +131,79 @@ for mode,q in b.groupby("mode"):
     rows.append({
         "mode":mode,
         "n":len(q),
-
-        "original_mean":
-            q.net_original_replay.mean(),
-
-        "b1_mean":
-            q.net.mean(),
-
-        "delta_mean":
-            d.mean(),
-
-        "delta_median":
-            d.median(),
-
-        "original_win":
-            (q.net_original_replay>0).mean(),
-
-        "b1_win":
-            (q.net>0).mean(),
-
+        "original_mean":q.net_original.mean(),
+        "b1_mean":q.net.mean(),
+        "delta_mean":d.mean(),
+        "delta_median":d.median(),
+        "original_win":(q.net_original>0).mean(),
+        "b1_win":(q.net>0).mean(),
         "delta_win":
-            (q.net>0).mean()
-            -(q.net_original_replay>0).mean(),
-
-        "delta_positive_pct":
-            (d>0).mean(),
-
-        "delta_negative_pct":
-            (d<0).mean()
+            (q.net>0).mean()-
+            (q.net_original>0).mean(),
+        "delta_positive_pct":(d>0).mean(),
+        "delta_negative_pct":(d<0).mean()
     })
 
 A=pd.DataFrame(rows)
+A.to_csv(O/"v416_attribution.csv",index=False)
 
-A.to_csv(
-    O/"v416_attribution.csv",
-    index=False
-)
-
-# -------------------------------------------------
+# -----------------------------
 # FOLD
-# -------------------------------------------------
+# -----------------------------
 
-rows=[]
+def make_table(cols,name):
 
-for (mode,fold),q in b.groupby(
-    ["mode","fold"]
-):
+    rows=[]
 
-    d=q["delta_net"]
+    for key,q in b.groupby(cols):
 
-    rows.append({
-        "mode":mode,
-        "fold":fold,
-        "n":len(q),
-        "original_mean":
-            q.net_original_replay.mean(),
-        "b1_mean":
-            q.net.mean(),
-        "delta_mean":
-            d.mean(),
-        "delta_median":
-            d.median(),
-        "delta_positive_pct":
-            (d>0).mean()
-    })
+        if not isinstance(key,tuple):
+            key=(key,)
 
-F=pd.DataFrame(rows)
+        d=q["delta_net"]
 
-F.to_csv(
-    O/"v416_fold.csv",
-    index=False
-)
+        z={
+            "n":len(q),
+            "original_mean":q.net_original.mean(),
+            "b1_mean":q.net.mean(),
+            "delta_mean":d.mean(),
+            "delta_median":d.median(),
+            "delta_positive_pct":(d>0).mean()
+        }
 
-# -------------------------------------------------
-# MARKET
-# -------------------------------------------------
+        z.update(dict(zip(cols,key)))
+        rows.append(z)
 
-rows=[]
+    z=pd.DataFrame(rows)
 
-for (mode,sym,it),q in b.groupby(
-    ["mode","symbol","interval"]
-):
+    if len(z):
+        z=z[
+            cols+
+            [
+                "n","original_mean","b1_mean",
+                "delta_mean","delta_median",
+                "delta_positive_pct"
+            ]
+        ]
 
-    d=q["delta_net"]
+    z.to_csv(O/f"v416_{name}.csv",index=False)
 
-    rows.append({
-        "mode":mode,
-        "symbol":sym,
-        "interval":it,
-        "n":len(q),
-        "original_mean":
-            q.net_original_replay.mean(),
-        "b1_mean":
-            q.net.mean(),
-        "delta_mean":
-            d.mean(),
-        "delta_median":
-            d.median(),
-        "delta_positive_pct":
-            (d>0).mean()
-    })
+    return z
 
-M=pd.DataFrame(rows)
+F=make_table(["mode","fold"],"fold")
+M=make_table(["mode","symbol","interval"],"market")
+S=make_table(["mode","signal"],"signal")
+G=make_table(["mode","regime"],"regime")
 
-M.to_csv(
-    O/"v416_market.csv",
-    index=False
-)
-
-# -------------------------------------------------
-# SIGNAL
-# -------------------------------------------------
-
-rows=[]
-
-for (mode,sig),q in b.groupby(
-    ["mode","signal"]
-):
-
-    d=q["delta_net"]
-
-    rows.append({
-        "mode":mode,
-        "signal":sig,
-        "n":len(q),
-        "original_mean":
-            q.net_original_replay.mean(),
-        "b1_mean":
-            q.net.mean(),
-        "delta_mean":
-            d.mean(),
-        "delta_median":
-            d.median(),
-        "delta_positive_pct":
-            (d>0).mean()
-    })
-
-S=pd.DataFrame(rows)
-
-S.to_csv(
-    O/"v416_signal.csv",
-    index=False
-)
-
-# -------------------------------------------------
-# REGIME
-# -------------------------------------------------
-
-rows=[]
-
-for (mode,reg),q in b.groupby(
-    ["mode","regime"]
-):
-
-    d=q["delta_net"]
-
-    rows.append({
-        "mode":mode,
-        "regime":reg,
-        "n":len(q),
-        "original_mean":
-            q.net_original_replay.mean(),
-        "b1_mean":
-            q.net.mean(),
-        "delta_mean":
-            d.mean(),
-        "delta_median":
-            d.median(),
-        "delta_positive_pct":
-            (d>0).mean()
-    })
-
-R=pd.DataFrame(rows)
-
-R.to_csv(
-    O/"v416_regime.csv",
-    index=False
-)
-
-# -------------------------------------------------
+# -----------------------------
 # DISTRIBUTION
-# -------------------------------------------------
+# -----------------------------
 
 rows=[]
 
 for mode,q in b.groupby("mode"):
 
-    d=q["delta_net"]
+    d=q.delta_net
 
     rows.append({
         "mode":mode,
@@ -399,45 +219,41 @@ for mode,q in b.groupby("mode"):
     })
 
 D=pd.DataFrame(rows)
-
 D.to_csv(
     O/"v416_delta_distribution.csv",
     index=False
 )
 
-# -------------------------------------------------
-# AUDIT COMPLET DES MATCHES
-# -------------------------------------------------
+# -----------------------------
+# TRADE AUDIT
+# -----------------------------
 
-audit=b[
-    [
-        "trade_id","mode",
-        "symbol","interval","fold",
-        "signal","regime","profile","side",
-        "entry_time","entry_price",
-        "net_original_replay",
-        "net","delta_net"
-    ]
-].copy()
+cols=[
+    "trade_id","mode",
+    "symbol","interval","fold",
+    "signal","regime","profile","side",
+    "entry_time","entry_price",
+    "net_original","net","delta_net"
+]
 
-audit.to_csv(
+b[cols].to_csv(
     O/"v416_trade_audit.csv",
     index=False
 )
 
-# -------------------------------------------------
-# RAPPORT
-# -------------------------------------------------
+# -----------------------------
+# REPORT
+# -----------------------------
 
 out=[
     "# SCALP LAB V4.16 — B1 ATTRIBUTION",
     "",
-    f"Original OOS source : {len(o)}",
+    f"Original source : {len(o)}",
     f"Replay rows : {len(x)}",
     f"B1 matched : {len(b)}",
     "Holdout : exclu",
     "",
-    "## ATTRIBUTION",
+    "## GLOBAL",
     A.to_string(index=False),
     "",
     "## DELTA DISTRIBUTION",
@@ -453,21 +269,19 @@ out=[
     S.to_string(index=False),
     "",
     "## REGIME",
-    R.to_string(index=False),
+    G.to_string(index=False),
     "",
     "## METHOD",
-    "- Source ORIGINAL = v44_trades_oos.csv.",
-    "- Résultat replay ORIGINAL = v414_replay.csv.",
-    "- B1 = résultats V4.14.",
-    "- Apparier par dimensions du trade + rang d'apparition.",
-    "- entry_time vient de v44_trades_oos.csv.",
+    "- ORIGINAL source = v44_trades_oos.csv.",
+    "- ORIGINAL replay = v414_replay.csv.",
+    "- B1 = V4.14 replay.",
+    "- Appariment par dimensions + rang d'apparition.",
+    "- entry_time provient de v44_trades_oos.csv.",
     "- delta_net = B1 moins ORIGINAL replay.",
-    "- delta positif = amélioration du même trade.",
     "- Aucun nouveau signal.",
     "- Aucun nouveau seuil.",
     "- Holdout exclu.",
-    "- Cette version mesure l'effet B1 sur les trades conservés.",
-    "- Les trades rejetés par les filtres GAP seront analysés au V4.17."
+    "- Les trades exclus par GAP seront étudiés en V4.17."
 ]
 
 (O/"summary_v416.md").write_text(
@@ -476,23 +290,26 @@ out=[
 )
 
 print()
-print("===== ATTRIBUTION =====")
+print("===== GLOBAL =====")
 print(A.to_string(index=False))
 
 print()
-print("===== DELTA DISTRIBUTION =====")
+print("===== DELTA =====")
 print(D.to_string(index=False))
 
 print()
 print("===== OUTPUTS =====")
-print("v416_attribution.csv")
-print("v416_delta_distribution.csv")
-print("v416_fold.csv")
-print("v416_market.csv")
-print("v416_signal.csv")
-print("v416_regime.csv")
-print("v416_trade_audit.csv")
-print("summary_v416.md")
+for f in [
+    "v416_attribution.csv",
+    "v416_delta_distribution.csv",
+    "v416_fold.csv",
+    "v416_market.csv",
+    "v416_signal.csv",
+    "v416_regime.csv",
+    "v416_trade_audit.csv",
+    "summary_v416.md"
+]:
+    print(f)
 
 print()
 print("V4.16 TERMINÉ")
