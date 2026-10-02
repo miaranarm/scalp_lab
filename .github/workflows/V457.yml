@@ -1,0 +1,65 @@
+name: SCALP LAB V4.5.7 Forensics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scalp-lab-research
+  cancel-in-progress: false
+
+jobs:
+  v457:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Run V4.5.7
+        run: python -u research_v457.py
+
+      - name: Show results
+        if: always()
+        run: |
+          echo "===== V4.5.7 ====="
+          cat results/summary_v457.md
+          echo ""
+          echo "===== MISSED TP ====="
+          cat results/v457_missed_tp_forensics.csv
+          echo ""
+          echo "===== CLASSIFICATION ====="
+          cat results/v457_classification.csv
+          echo ""
+          echo "===== STRATEGY ====="
+          cat results/v457_strategy.csv
+
+      - name: Commit results
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add results/v457_*.csv results/summary_v457.md
+
+          if git diff --cached --quiet; then
+            echo "No V4.5.7 changes."
+            exit 0
+          fi
+
+          git commit -m "Research V4.5.7 missed TP forensics"
+
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
