@@ -6,113 +6,168 @@ SRC=O/"v414_replay.csv"
 
 x=pd.read_csv(SRC)
 
-need=["mode","symbol","interval","fold","signal","regime","profile",
-      "side","net"]
+need=[
+    "mode","symbol","interval","fold","signal",
+    "regime","profile","side","net"
+]
 miss=[c for c in need if c not in x.columns]
-if miss: raise SystemExit("COLONNES ABSENTES: "+",".join(miss))
+if miss:
+    raise SystemExit("COLONNES ABSENTES: "+",".join(miss))
 
-x["mode"]=x["mode"].astype(str)
+print("V4.16 | B1 ATTRIBUTION / SURVIVORSHIP")
+
+# -------------------------------------------------
+# ORIGINAL
+# -------------------------------------------------
+
 o=x[x["mode"]=="ORIGINAL"].copy()
 
 if o.empty:
     raise SystemExit("ORIGINAL ABSENT")
 
-print("V4.16 | B1 ATTRIBUTION / SURVIVORSHIP")
 print("ORIGINAL",len(o))
+
+# -------------------------------------------------
+# IDENTIFIANT DE TRADE
+# -------------------------------------------------
+#
+# v414_replay reprend les mêmes trades V4.14.
+# entry_time est l'identifiant le plus fiable.
+# On utilise les dimensions du trade + entry_time.
+#
+# -------------------------------------------------
+
+idcols=[
+    "symbol","interval","fold","signal",
+    "regime","profile","side"
+]
+
+if "entry_time" in x.columns:
+    idcols += ["entry_time"]
+else:
+    raise SystemExit(
+        "entry_time ABSENT: impossible de faire "
+        "l'attribution trade par trade."
+    )
+
+# Nettoyage éventuel des dates
+x["entry_time"]=pd.to_datetime(
+    x["entry_time"],errors="coerce",utc=True
+)
+
+if x["entry_time"].isna().any():
+    raise SystemExit("entry_time contient des valeurs invalides")
+
+# Vérification des doublons ORIGINAL
+dup=o.duplicated(idcols).sum()
+
+print("ORIGINAL DUPLICATES",dup)
+
+if dup:
+    raise SystemExit(
+        "IDENTIFIANT ORIGINAL NON UNIQUE: "
+        f"{dup} doublons"
+    )
+
+# -------------------------------------------------
+# Table ORIGINAL
+# -------------------------------------------------
+
+orig=o[idcols+["net"]].copy()
+orig=orig.rename(columns={"net":"net_original"})
+
+# -------------------------------------------------
+# B1
+# -------------------------------------------------
 
 modes=["B1_ALL","GAP0","GAP10","GAP25","GAP50"]
 
-# -------------------------------------------------
-# Même trade = identité par dimensions disponibles
-# -------------------------------------------------
-
-keys=["symbol","interval","fold","signal","regime",
-      "profile","side"]
-
-# Si plusieurs lignes existent dans un groupe,
-# on conserve l'ordre original comme identifiant local.
-o["tid"]=o.groupby(keys).cumcount()
-
-x=x[x["mode"].isin(modes)].copy()
-x["tid"]=x.groupby(keys+["mode"]).cumcount()
+b=x[x["mode"].isin(modes)].copy()
 
 # -------------------------------------------------
-# Recalage plus robuste par trade ordinal.
-# Les populations B1 sont des sous-ensembles du même
-# flux V4.14, mais peuvent avoir des trous.
-# On reconstruit un identifiant avec les dimensions
-# et entry_time si disponible.
+# MERGE
 # -------------------------------------------------
 
-if "entry_time" in o.columns and "entry_time" in x.columns:
-    keys2=keys+["entry_time"]
-else:
-    keys2=keys+["net"]
+z=b.merge(
+    orig,
+    on=idcols,
+    how="left",
+    validate="many_to_one"
+)
 
-o2=o[keys2+["net"]].copy()
-o2=o2.rename(columns={"net":"net_original"})
+z["matched"]=z["net_original"].notna()
 
-# Les lignes B1 gardent les mêmes dimensions de trade.
-z=x.merge(o2,on=keys2,how="left")
+print("B1 ROWS",len(b))
+print("MATCHED",int(z["matched"].sum()))
+print("UNMATCHED",int((~z["matched"]).sum()))
 
-z["kept"]=z["net_original"].notna()
+if (~z["matched"]).any():
+    print("WARNING: trades B1 non retrouvés")
+
+z=z[z["matched"]].copy()
 
 # -------------------------------------------------
-# ATTRIBUTION
+# ATTRIBUTION TRADE PAR TRADE
 # -------------------------------------------------
 
-# Pour chaque mode :
-# ALL = tous les trades rejoués B1
-# FILTERED = trades dont le gap filtre exclut le trade
-#
-# Le CSV v414_replay ne contient pas explicitement les
-# trades exclus par GAP. On peut donc mesurer les survivants
-# directement, et comparer leur net B1 au net ORIGINAL.
-#
-# L'écart B1 - ORIGINAL = effet combiné :
-# entrée différente + recalcul TP/SL + survivorship.
+z["delta_net"]=z["net"]-z["net_original"]
 
 rows=[]
 
 for mode,q in z.groupby("mode"):
 
-    q=q[q["kept"]].copy()
-
-    if q.empty: continue
-
-    q["delta_net"]=q["net"]-q["net_original"]
+    dn=q["delta_net"]
 
     rows.append({
         "mode":mode,
         "n":len(q),
-        "original_mean":q.net_original.mean(),
-        "b1_mean":q.net.mean(),
-        "delta_mean":q.delta_net.mean(),
-        "original_win":(q.net_original>0).mean(),
-        "b1_win":(q.net>0).mean(),
-        "delta_win":(q.net>0).mean()-
-                    (q.net_original>0).mean(),
-        "original_positive":(q.net_original>0).sum(),
-        "b1_positive":(q.net>0).sum(),
-        "delta_positive":
-            (q.net>0).sum()-(q.net_original>0).sum()
+
+        "original_mean":
+            q["net_original"].mean(),
+
+        "b1_mean":
+            q["net"].mean(),
+
+        "delta_mean":
+            dn.mean(),
+
+        "delta_median":
+            dn.median(),
+
+        "original_win":
+            (q["net_original"]>0).mean(),
+
+        "b1_win":
+            (q["net"]>0).mean(),
+
+        "delta_win":
+            (q["net"]>0).mean()
+            -(q["net_original"]>0).mean(),
+
+        "delta_positive_pct":
+            (dn>0).mean(),
+
+        "delta_negative_pct":
+            (dn<0).mean()
     })
 
 A=pd.DataFrame(rows)
-A.to_csv(O/"v416_attribution.csv",index=False)
+A.to_csv(
+    O/"v416_attribution.csv",
+    index=False
+)
 
 # -------------------------------------------------
-# PAR FOLD
+# FOLD
 # -------------------------------------------------
 
 rows=[]
 
-for (mode,fold),q in z.groupby(["mode","fold"]):
+for (mode,fold),q in z.groupby(
+    ["mode","fold"]
+):
 
-    q=q[q["kept"]].copy()
-    if q.empty: continue
-
-    dn=q.net-q.net_original
+    dn=q["delta_net"]
 
     rows.append({
         "mode":mode,
@@ -121,17 +176,23 @@ for (mode,fold),q in z.groupby(["mode","fold"]):
         "original_mean":q.net_original.mean(),
         "b1_mean":q.net.mean(),
         "delta_mean":dn.mean(),
+        "delta_median":dn.median(),
         "delta_win":
-            (q.net>0).mean()-(q.net_original>0).mean(),
-        "positive_delta":
+            (q.net>0).mean()
+            -(q.net_original>0).mean(),
+        "delta_positive_pct":
             (dn>0).mean()
     })
 
 F=pd.DataFrame(rows)
-F.to_csv(O/"v416_fold.csv",index=False)
+
+F.to_csv(
+    O/"v416_fold.csv",
+    index=False
+)
 
 # -------------------------------------------------
-# MARCHÉ / INTERVALLE
+# MARKET / INTERVAL
 # -------------------------------------------------
 
 rows=[]
@@ -140,10 +201,7 @@ for (mode,sym,it),q in z.groupby(
     ["mode","symbol","interval"]
 ):
 
-    q=q[q["kept"]].copy()
-    if q.empty: continue
-
-    dn=q.net-q.net_original
+    dn=q["delta_net"]
 
     rows.append({
         "mode":mode,
@@ -153,14 +211,20 @@ for (mode,sym,it),q in z.groupby(
         "original_mean":q.net_original.mean(),
         "b1_mean":q.net.mean(),
         "delta_mean":dn.mean(),
+        "delta_median":dn.median(),
         "delta_win":
-            (q.net>0).mean()-(q.net_original>0).mean(),
-        "positive_delta":
+            (q.net>0).mean()
+            -(q.net_original>0).mean(),
+        "delta_positive_pct":
             (dn>0).mean()
     })
 
 M=pd.DataFrame(rows)
-M.to_csv(O/"v416_market.csv",index=False)
+
+M.to_csv(
+    O/"v416_market.csv",
+    index=False
+)
 
 # -------------------------------------------------
 # SIGNAL
@@ -168,12 +232,11 @@ M.to_csv(O/"v416_market.csv",index=False)
 
 rows=[]
 
-for (mode,sig),q in z.groupby(["mode","signal"]):
+for (mode,sig),q in z.groupby(
+    ["mode","signal"]
+):
 
-    q=q[q["kept"]].copy()
-    if q.empty: continue
-
-    dn=q.net-q.net_original
+    dn=q["delta_net"]
 
     rows.append({
         "mode":mode,
@@ -182,14 +245,20 @@ for (mode,sig),q in z.groupby(["mode","signal"]):
         "original_mean":q.net_original.mean(),
         "b1_mean":q.net.mean(),
         "delta_mean":dn.mean(),
+        "delta_median":dn.median(),
         "delta_win":
-            (q.net>0).mean()-(q.net_original>0).mean(),
-        "positive_delta":
+            (q.net>0).mean()
+            -(q.net_original>0).mean(),
+        "delta_positive_pct":
             (dn>0).mean()
     })
 
 S=pd.DataFrame(rows)
-S.to_csv(O/"v416_signal.csv",index=False)
+
+S.to_csv(
+    O/"v416_signal.csv",
+    index=False
+)
 
 # -------------------------------------------------
 # REGIME
@@ -197,12 +266,11 @@ S.to_csv(O/"v416_signal.csv",index=False)
 
 rows=[]
 
-for (mode,reg),q in z.groupby(["mode","regime"]):
+for (mode,reg),q in z.groupby(
+    ["mode","regime"]
+):
 
-    q=q[q["kept"]].copy()
-    if q.empty: continue
-
-    dn=q.net-q.net_original
+    dn=q["delta_net"]
 
     rows.append({
         "mode":mode,
@@ -211,88 +279,98 @@ for (mode,reg),q in z.groupby(["mode","regime"]):
         "original_mean":q.net_original.mean(),
         "b1_mean":q.net.mean(),
         "delta_mean":dn.mean(),
+        "delta_median":dn.median(),
         "delta_win":
-            (q.net>0).mean()-(q.net_original>0).mean(),
-        "positive_delta":
+            (q.net>0).mean()
+            -(q.net_original>0).mean(),
+        "delta_positive_pct":
             (dn>0).mean()
     })
 
 R=pd.DataFrame(rows)
-R.to_csv(O/"v416_regime.csv",index=False)
+
+R.to_csv(
+    O/"v416_regime.csv",
+    index=False
+)
 
 # -------------------------------------------------
-# DISTRIBUTION DE L'EFFET B1
+# DISTRIBUTION
 # -------------------------------------------------
 
 rows=[]
 
 for mode,q in z.groupby("mode"):
 
-    q=q[q["kept"]].copy()
-    if q.empty: continue
-
-    dn=q.net-q.net_original
+    dn=q["delta_net"]
 
     rows.append({
         "mode":mode,
         "n":len(q),
-        "delta_mean":dn.mean(),
-        "delta_median":dn.median(),
-        "delta_p10":dn.quantile(.10),
-        "delta_p25":dn.quantile(.25),
-        "delta_p75":dn.quantile(.75),
-        "delta_p90":dn.quantile(.90),
-        "delta_positive_pct":(dn>0).mean(),
-        "delta_negative_pct":(dn<0).mean(),
-        "delta_zero_pct":(dn==0).mean()
+        "mean":dn.mean(),
+        "median":dn.median(),
+        "p10":dn.quantile(.10),
+        "p25":dn.quantile(.25),
+        "p75":dn.quantile(.75),
+        "p90":dn.quantile(.90),
+        "positive_pct":(dn>0).mean(),
+        "negative_pct":(dn<0).mean()
     })
 
 D=pd.DataFrame(rows)
-D.to_csv(O/"v416_delta_distribution.csv",index=False)
+
+D.to_csv(
+    O/"v416_delta_distribution.csv",
+    index=False
+)
 
 # -------------------------------------------------
 # RAPPORT
 # -------------------------------------------------
 
 out=[
-"# SCALP LAB V4.16 — B1 ATTRIBUTION / SURVIVORSHIP",
-"",
-f"ORIGINAL rows : {len(o)}",
-f"B1 replay rows : {len(x)}",
-"Holdout : exclu",
-"",
-"## ATTRIBUTION",
-A.to_string(index=False),
-"",
-"## DELTA DISTRIBUTION",
-D.to_string(index=False),
-"",
-"## FOLD",
-F.to_string(index=False),
-"",
-"## MARKET / INTERVAL",
-M.to_string(index=False),
-"",
-"## SIGNAL",
-S.to_string(index=False),
-"",
-"## REGIME",
-R.to_string(index=False),
-"",
-"## INTERPRETATION",
-"- original_mean = résultat du même trade selon ORIGINAL.",
-"- b1_mean = résultat du même trade selon B1.",
-"- delta_mean = B1 moins ORIGINAL sur les trades conservés.",
-"- positive_delta = proportion de trades dont le net augmente avec B1.",
-"- Les trades exclus par un filtre GAP ne sont pas inclus dans le delta individuel.",
-"- Cette analyse distingue l'effet du nouveau prix d'entrée de l'effet de sélection.",
-"- Aucun seuil n'est sélectionné.",
-"- Aucun holdout n'est utilisé.",
-"- Aucun signal nouveau n'est créé."
+    "# SCALP LAB V4.16 — B1 ATTRIBUTION",
+    "",
+    f"ORIGINAL : {len(o)}",
+    f"B1 rows : {len(b)}",
+    f"Matched : {len(z)}",
+    "Holdout : exclu",
+    "",
+    "## ATTRIBUTION",
+    A.to_string(index=False),
+    "",
+    "## DELTA DISTRIBUTION",
+    D.to_string(index=False),
+    "",
+    "## FOLD",
+    F.to_string(index=False),
+    "",
+    "## MARKET / INTERVAL",
+    M.to_string(index=False),
+    "",
+    "## SIGNAL",
+    S.to_string(index=False),
+    "",
+    "## REGIME",
+    R.to_string(index=False),
+    "",
+    "## METHOD",
+    "- ORIGINAL = résultat V4.14 de référence.",
+    "- B1 = résultat V4.14 avec entrée B1.",
+    "- Les trades sont appariés par symbol, interval, fold, signal,",
+    "  regime, profile, side et entry_time.",
+    "- delta_net = net B1 moins net ORIGINAL.",
+    "- delta positif = amélioration du même trade.",
+    "- Aucun nouveau signal.",
+    "- Aucun nouveau seuil.",
+    "- Holdout exclu.",
+    "- Cette version mesure l'effet d'entrée sur les trades conservés.",
+    "- Elle ne prétend pas encore mesurer la performance des trades rejetés."
 ]
 
 (O/"summary_v416.md").write_text(
-    "\n".join(out),encoding="utf-8"
+    "\n".join(out),
+    encoding="utf-8"
 )
 
 print()
@@ -300,8 +378,18 @@ print("===== ATTRIBUTION =====")
 print(A.to_string(index=False))
 
 print()
-print("===== DELTA =====")
+print("===== DELTA DISTRIBUTION =====")
 print(D.to_string(index=False))
+
+print()
+print("===== OUTPUTS =====")
+print("v416_attribution.csv")
+print("v416_delta_distribution.csv")
+print("v416_fold.csv")
+print("v416_market.csv")
+print("v416_signal.csv")
+print("v416_regime.csv")
+print("summary_v416.md")
 
 print()
 print("V4.16 TERMINÉ")
