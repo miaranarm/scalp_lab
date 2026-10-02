@@ -1,2 +1,2 @@
-trades,tp_exits,sl_exits,time_exits,tp_reached,missed_tp,clean_missed_tp,tp_sl_both_reached,tp_then_sl,tp_then_time
-2196,791,1213,192,808,17,6,11,11,6
+trades,tp,sl,time,tp_reached,missed_tp,clean,both
+2196,791,1213,192,808,17,6,11

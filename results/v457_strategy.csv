@@ -1,13 +1,13 @@
-symbol,interval,signal,regime,profile,missed_tp,clean_missed_tp,both_reached,mean_net,mean_mfe,mean_mae
-BTCUSDT,5m,pullback rsi=35,all,maker_both,1,1,0,0.0018562267707944,0.0039146022415297,-0.0017053712735376
-BTCUSDT,5m,pullback rsi=35,trend,maker_both,1,1,0,-0.0020473553157219,0.0052708620350324,-0.0028144066128715
-BTCUSDT,5m,pullback rsi=40,trend,maker_both,3,1,2,-0.0012047938521777002,0.003133266410010133,-0.0030505877308725665
-ETHUSDT,15m,donchian n=50 vol=1.5,range,maker_tp,1,0,1,-0.0066867372781393,0.0140392849493083,-0.0061424534255128
-ETHUSDT,5m,donchian n=50 vol=1.5,range,maker_both,2,1,1,-0.0012469420302738,0.00244378207605525,-0.00103730098339795
-ETHUSDT,5m,pullback rsi=35,all,maker_both,2,0,2,-0.0047850532435878,0.004594288604593,-0.00594038481369485
-ETHUSDT,5m,pullback rsi=40,range,maker_tp,1,0,1,-0.0026123159080235,0.0014982825857421,-0.0033306043940923
-SOLUSDT,15m,donchian n=20 vol=1.5,range,maker_both,1,0,1,-0.0045524307899852,0.0071621836702212,-0.0050135285691548
-SOLUSDT,15m,pullback rsi=40,all,maker_both,1,1,0,0.006249389076266,0.0097466723915842,-0.0090596822670674
-SOLUSDT,5m,breakout n=20,range,maker_both,2,0,2,-0.0060217206766102,0.0111054376252406,-0.00859466615983935
-SOLUSDT,5m,breakout n=20,trend,maker_both,1,1,0,7.961665901357051e-05,0.0036711115909948,-0.0025913728877612
-SOLUSDT,5m,vwap n=48 k=3.0,range,maker_both,1,0,1,-0.0054407462371529,0.0143400221356045,-0.0091429671334392
+symbol,interval,signal,regime,profile,n,clean,both,mean_net
+BTCUSDT,5m,pullback rsi=35,all,maker_both,1,1,0,0.0018562267707944
+BTCUSDT,5m,pullback rsi=35,trend,maker_both,1,1,0,-0.0020473553157219
+BTCUSDT,5m,pullback rsi=40,trend,maker_both,3,1,2,-0.0012047938521777002
+ETHUSDT,15m,donchian n=50 vol=1.5,range,maker_tp,1,0,1,-0.0066867372781393
+ETHUSDT,5m,donchian n=50 vol=1.5,range,maker_both,2,1,1,-0.0012469420302738
+ETHUSDT,5m,pullback rsi=35,all,maker_both,2,0,2,-0.0047850532435878
+ETHUSDT,5m,pullback rsi=40,range,maker_tp,1,0,1,-0.0026123159080235
+SOLUSDT,15m,donchian n=20 vol=1.5,range,maker_both,1,0,1,-0.0045524307899852
+SOLUSDT,15m,pullback rsi=40,all,maker_both,1,1,0,0.006249389076266
+SOLUSDT,5m,breakout n=20,range,maker_both,2,0,2,-0.0060217206766102
+SOLUSDT,5m,breakout n=20,trend,maker_both,1,1,0,7.961665901357051e-05
+SOLUSDT,5m,vwap n=48 k=3.0,range,maker_both,1,0,1,-0.0054407462371529
