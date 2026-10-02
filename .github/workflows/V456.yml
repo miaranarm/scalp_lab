@@ -1,0 +1,56 @@
+name: SCALP LAB V4.5.6 Formula Audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  v456:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Run V4.5.6
+        run: python -u research_v456.py
+
+      - name: Show results
+        if: always()
+        run: |
+          echo "===== V4.5.6 ====="
+          cat results/summary_v456.md 2>/dev/null || true
+          echo ""
+          echo "===== FILES ====="
+          ls -lh results/v456* 2>/dev/null || true
+
+      - name: Commit and push
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add results/v456* 2>/dev/null || true
+
+          if git diff --cached --quiet; then
+            echo "No V4.5.6 changes."
+            exit 0
+          fi
+
+          git commit -m "Research V4.5.6 formula audit"
+
+          git fetch origin main
+          git rebase origin/main
+
+          git push origin HEAD:main
