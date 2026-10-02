@@ -33,17 +33,36 @@ jobs:
       - name: Show results
         if: always()
         run: |
-          echo "===== V4.5.7 ====="
-          cat results/summary_v457.md
+          echo "===== V4.5.7 SUMMARY ====="
+          if [ -f results/summary_v457.md ]; then
+            cat results/summary_v457.md
+          else
+            echo "summary_v457.md absent"
+          fi
+
           echo ""
           echo "===== MISSED TP ====="
-          cat results/v457_missed_tp_forensics.csv
+          if [ -f results/v457_missed_tp_forensics.csv ]; then
+            cat results/v457_missed_tp_forensics.csv
+          else
+            echo "file absent"
+          fi
+
           echo ""
           echo "===== CLASSIFICATION ====="
-          cat results/v457_classification.csv
+          if [ -f results/v457_classification.csv ]; then
+            cat results/v457_classification.csv
+          else
+            echo "file absent"
+          fi
+
           echo ""
           echo "===== STRATEGY ====="
-          cat results/v457_strategy.csv
+          if [ -f results/v457_strategy.csv ]; then
+            cat results/v457_strategy.csv
+          else
+            echo "file absent"
+          fi
 
       - name: Commit results
         if: success()
