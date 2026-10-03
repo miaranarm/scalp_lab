@@ -46,6 +46,9 @@ for s in S:
 o=pd.DataFrame(O,columns=["symbol","interval","fold","thr","h","oos_return","trades"])
 q=pd.DataFrame(Q,columns=["symbol","interval","thr","h","final_return","trades"])
 o.to_csv("results/v426_oos.csv",index=False); q.to_csv("results/v426_final.csv",index=False)
+
+def md(df):
+ return "| "+" | ".join(df.columns)+" |\n| "+" | ".join(["---"]*len(df.columns))+" |\n"+"\n".join("| "+" | ".join(str(x) for x in row)+" |" for row in df.itertuples(index=False,name=None))
 with open("results/summary_v426.md","w") as z:
  z.write("# V4.26 — Volume Shock Continuation\n\n")
  z.write("Abnormal base volume versus 48-bar median + candle direction. Fixed thresholds 1.5/2/2.5, horizons 1/3/6. Chronological TRAIN/TEST; final 30d confirmation-only.\n\n")
