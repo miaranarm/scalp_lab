@@ -1,0 +1,6 @@
+# V4.49 — VWAP PULLBACK IN EMA TREND
+
+ symbol  vwap_n  ema   k  horizon  train_total  test_mean  test_trades  test_total  holdout_mean  holdout_trades  holdout_total
+BTCUSDT      24   12 1.5       12    -0.030383  -0.001229          123   -0.151161     -0.001272              60      -0.076308
+ETHUSDT      48   12 1.0       12    -0.080702  -0.002402           69   -0.165744     -0.001654              38      -0.062835
+SOLUSDT      48   12 0.5       12    -0.121211  -0.001148          121   -0.138958     -0.001325              60      -0.079501
