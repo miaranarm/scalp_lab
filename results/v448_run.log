@@ -1,0 +1,7 @@
+MISS BTCUSDT-aggTrades-2026-10-03.zip HTTPError
+MISS ETHUSDT-aggTrades-2026-10-03.zip HTTPError
+MISS SOLUSDT-aggTrades-2026-10-03.zip HTTPError
+ symbol interval  lookback   k  horizon  train_total  test_mean  test_trades  test_total  holdout_mean  holdout_trades  holdout_total
+BTCUSDT      15m        24 3.0       12     0.063178  -0.005275           20   -0.105507     -0.000334              14      -0.004672
+ETHUSDT      15m        48 1.5       24     0.090312  -0.001648          162   -0.266914     -0.001579              81      -0.127914
+SOLUSDT      15m        48 2.5       24     0.063608   0.001131           78    0.088201     -0.001662              41      -0.068125
