@@ -1,0 +1,4 @@
+  File "/home/runner/work/scalp_lab/scalp_lab/research_v433.py", line 73
+    """+s.to_string(index=False)+"
+                                 ^
+SyntaxError: unterminated string literal (detected at line 73)
