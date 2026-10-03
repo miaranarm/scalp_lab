@@ -1,75 +1,54 @@
-import os,zipfile,io,urllib.request
+import io,os,zipfile,urllib.request
 import numpy as np,pandas as pd
 
-SYMS=["BTCUSDT","ETHUSDT","SOLUSDT"]; INTS=["5m","15m"]
-THR=[1.5,2.0,2.5]; H=[1,3,6]; FEE={"BTCUSDT":.0012,"ETHUSDT":.0013,"SOLUSDT":.0016}
-START="2025-10-01"; END="2026-10-03"
+S=["BTCUSDT","ETHUSDT","SOLUSDT"]; I=["5m","15m"]
+TH=[1.5,2,2.5]; H=[1,3,6]; F={"BTCUSDT":.0012,"ETHUSDT":.0013,"SOLUSDT":.0016}
+A=pd.Timestamp("2025-10-01",tz="UTC"); B=pd.Timestamp("2026-10-03",tz="UTC")
 
 def load(s,iv):
-    u=f"https://data.binance.vision/data/futures/um/daily/klines/{s}/{iv}"
-    ds=pd.date_range(START,END,freq="D",inclusive="left"); a=[]
-    for d in ds:
-        z=f"{s}-{iv}-{d:%Y-%m-%d}.zip"
-        try:
-            b=urllib.request.urlopen(f"{u}/{z}",timeout=20).read()
-            q=zipfile.ZipFile(io.BytesIO(b)).read(z[:-4]+".csv")
-            x=pd.read_csv(io.BytesIO(q),header=None)
-            x=x.iloc[:,:12]; x.columns=["t","o","h","l","c","v","ct","qv","n","tb","tq","x"]
-            x=x[pd.to_numeric(x.t,errors="coerce").notna()].copy()
-            x.t=pd.to_datetime(pd.to_numeric(x.t),unit="ms",utc=True); x.c=pd.to_numeric(x.c); x.v=pd.to_numeric(x.v)
-            a.append(x[["t","c","v"]])
-        except: pass
-    if not a: raise RuntimeError(f"no data {s} {iv}")
-    return pd.concat(a).drop_duplicates("t").sort_values("t").reset_index(drop=True)
+ u=f"https://data.binance.vision/data/futures/um/monthly/klines/{s}/{iv}"
+ out=[]
+ for m in pd.date_range(A,B,freq="MS"):
+  n=f"{s}-{iv}-{m:%Y-%m}.zip"
+  try:
+   b=urllib.request.urlopen(f"{u}/{n}",timeout=60).read()
+   z=zipfile.ZipFile(io.BytesIO(b)); q=z.read(z.namelist()[0])
+   d=pd.read_csv(io.BytesIO(q),header=None).iloc[:,:12]
+   d.columns=["t","o","h","l","c","v","ct","qv","n","tb","tq","x"]
+   d=d[pd.to_numeric(d.t,errors="coerce").notna()].copy()
+   d["t"]=pd.to_datetime(pd.to_numeric(d.t),unit="ms",utc=True)
+   d["c"]=pd.to_numeric(d.c); d["v"]=pd.to_numeric(d.v)
+   out.append(d[["t","c","v"]])
+  except Exception as e: print("SKIP",n,type(e).__name__)
+ if not out: raise RuntimeError(f"no data {s} {iv}")
+ return pd.concat(out).drop_duplicates("t").sort_values("t").reset_index(drop=True)
 
-def score(d,t,h,fee):
-    # abnormal quote volume proxy + candle direction; continuation only
-    q=d.v.rolling(48).median()
-    shock=d.v/q
-    ret=d.c.pct_change()
-    sig=(shock>=t)&(ret>0) | (shock>=t)&(ret<0)
-    side=np.where(ret>0,1,-1)
-    f=d.c.shift(-h)/d.c-1
-    r=side*f-fee
-    r=r[sig].dropna()
-    return r.mean() if len(r) else np.nan,len(r)
+def sc(d,t,h,fee):
+ med=d.v.rolling(48,min_periods=48).median()
+ shock=d.v/med; r=d.c.pct_change()
+ sig=shock>=t
+ side=np.sign(r)
+ fut=d.c.shift(-h)/d.c-1
+ x=(side*fut-fee)[sig & side.ne(0)].dropna()
+ return (x.mean(),len(x)) if len(x) else (np.nan,0)
 
-os.makedirs("results",exist_ok=True); rows=[]; finals=[]
-for s in SYMS:
- for iv in INTS:
-    d=load(s,iv)
-    cut=d.t.searchsorted(pd.Timestamp(START,tz="UTC")); end=d.t.searchsorted(pd.Timestamp(END,tz="UTC"))
-    d=d.iloc[cut:end].reset_index(drop=True)
-    fold=1500
-    folds=[]
-    p=0
-    while p+fold+600<=len(d):
-        tr=d.iloc[p:p+1200]; te=d.iloc[p+1200:p+1500]
-        best=None
-        for t in THR:
-          for h in H:
-            m,n=score(tr,t,h,FEE[s])
-            if np.isfinite(m) and (best is None or m>best[0]): best=(m,t,h,n)
-        m,n=score(te,best[1],best[2],FEE[s])
-        rows.append([s,iv,p,best[1],best[2],m,n]); p+=300
-    # final 30d: last 30d; selection only on prior 120d
-    final_start=d.t.max()-pd.Timedelta(days=30)
-    train=d[d.t<final_start].tail(1200); final=d[d.t>=final_start]
-    best=None
-    for t in THR:
-      for h in H:
-        m,n=score(train,t,h,FEE[s])
-        if np.isfinite(m) and (best is None or m>best[0]): best=(m,t,h,n)
-    m,n=score(final,best[1],best[2],FEE[s])
-    finals.append([s,iv,best[1],best[2],m,n])
-pd.DataFrame(rows,columns=["symbol","interval","fold","thr","h","oos_return","trades"]).to_csv("results/v426_oos.csv",index=False)
-pd.DataFrame(finals,columns=["symbol","interval","thr","h","final_return","trades"]).to_csv("results/v426_final.csv",index=False)
-o=pd.DataFrame(rows); f=pd.DataFrame(finals)
+os.makedirs("results",exist_ok=True); O=[]; Q=[]
+for s in S:
+ for iv in I:
+  d=load(s,iv); d=d[(d.t>=A)&(d.t<B)].reset_index(drop=True)
+  for p in range(0,max(0,len(d)-1500),300):
+   tr=d.iloc[p:p+1200]; te=d.iloc[p+1200:p+1500]
+   best=max(((sc(tr,t,h,F[s])[0],t,h) for t in TH for h in H),key=lambda x:-np.inf if not np.isfinite(x[0]) else x[0])
+   m,n=sc(te,best[1],best[2],F[s]); O.append([s,iv,p,best[1],best[2],m,n])
+  fs=d.t.max()-pd.Timedelta(days=30); tr=d[d.t<fs].tail(1200); te=d[d.t>=fs]
+  best=max(((sc(tr,t,h,F[s])[0],t,h) for t in TH for h in H),key=lambda x:-np.inf if not np.isfinite(x[0]) else x[0])
+  m,n=sc(te,best[1],best[2],F[s]); Q.append([s,iv,best[1],best[2],m,n])
+o=pd.DataFrame(O,columns=["symbol","interval","fold","thr","h","oos_return","trades"])
+q=pd.DataFrame(Q,columns=["symbol","interval","thr","h","final_return","trades"])
+o.to_csv("results/v426_oos.csv",index=False); q.to_csv("results/v426_final.csv",index=False)
 with open("results/summary_v426.md","w") as z:
  z.write("# V4.26 — Volume Shock Continuation\n\n")
- z.write("Independent hypothesis: abnormal volume relative to 48-bar median, with candle direction, predicts short-horizon continuation. Fixed thresholds 1.5/2/2.5 and horizons 1/3/6. TRAIN→TEST; final 30d untouched until confirmation. Costs included.\n\n")
- z.write("## OOS\n\n"+o.to_markdown(index=False)+"\n\n")
- z.write("## FINAL HOLDOUT\n\n"+f.to_markdown(index=False)+"\n\n")
- z.write(f"FINAL negative blocks: {(f.final_return<0).sum()}/{len(f)}\n")
-
-# trigger
+ z.write("Abnormal base volume versus 48-bar median + candle direction. Fixed thresholds 1.5/2/2.5, horizons 1/3/6. Chronological TRAIN/TEST; final 30d confirmation-only.\n\n")
+ z.write("## FINAL HOLDOUT\n\n"+q.to_markdown(index=False)+"\n\n")
+ z.write(f"FINAL negative blocks: {(q.final_return<0).sum()}/{len(q)}\n\n")
+ z.write("## OOS folds\n\n"+o.to_markdown(index=False)+"\n")
