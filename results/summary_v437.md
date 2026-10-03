@@ -1,9 +1,9 @@
-# V4.37 — DONCHIAN CLOSE BREAKOUT
+# V4.38 — DONCHIAN CLOSE BREAKOUT
 
- symbol interval  lookback  horizon  train_total  test_mean  test_trades  test_total  holdout_mean  holdout_trades  holdout_total
-BTCUSDT       5m        48        1    -1.811858  -0.001240         1024   -1.269660     -0.001314             519      -0.682204
-BTCUSDT      15m        48        1    -0.520744  -0.001073          290   -0.311211     -0.001252             142      -0.177851
-ETHUSDT       5m        48        3    -1.271331  -0.001513          746   -1.128723     -0.001360             418      -0.568662
-ETHUSDT      15m        48        1    -0.393326  -0.001133          219   -0.248136     -0.001459             120      -0.175021
-SOLUSDT       5m        48        3    -2.138492  -0.001800          845   -1.520615     -0.001786             427      -0.762529
-SOLUSDT      15m        48        1    -0.579736  -0.001301          263   -0.342067     -0.001589             125      -0.198570
+ symbol interval  lookback  horizon  atr  train_total  test_mean  test_trades  test_total  holdout_mean  holdout_trades  holdout_total
+BTCUSDT       5m        48        1   24    -1.277788  -0.001260          670   -0.843938     -0.001232             354      -0.436274
+BTCUSDT      15m        48        1   12    -0.430929  -0.001028          225   -0.231244     -0.001261             111      -0.139965
+ETHUSDT       5m        48        3   24    -0.894648  -0.001388          532   -0.738678     -0.001055             274      -0.289025
+ETHUSDT      15m        48        3   12    -0.303236  -0.000967          186   -0.179770     -0.002017              93      -0.187592
+SOLUSDT       5m        48        1   24    -1.541158  -0.001650          586   -0.966624     -0.001598             286      -0.457125
+SOLUSDT      15m        48        1   24    -0.429950  -0.001576          174   -0.274180     -0.001920              85      -0.163235
