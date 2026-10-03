@@ -1,6 +1,6 @@
 import os,zipfile,urllib.request,numpy as np,pandas as pd
 from pathlib import Path
-SYM=["BTCUSDT","ETHUSDT","SOLUSDT"]; F={"BTCUSDT":.0012,"ETHUSDT":.0013,"SOLUSDT":.0016}
+SYM=["BTCUSDT","ETHUSDT","SOLUSDT"]; F={"BTCUSDT":.0012,"ETHUSDT":.0013,"SOLUSDT":.0016}; N=[6,12,24,48]; H=[1,3,6,12]
 START=pd.Timestamp("2026-04-01",tz="UTC"); END=pd.Timestamp("2026-10-03",tz="UTC"); TH=[.20,.30,.40]; H=[1,3,6]
 OUT=Path("results"); OUT.mkdir(exist_ok=True)
 
