@@ -12,121 +12,96 @@ r=pd.read_csv(R)
 
 K=["symbol","interval","fold","signal","regime","profile","side"]
 
-need=[*K,"entry_time"]
-for c in need:
-    if c not in o:
-        raise SystemExit("v44 COLONNE ABSENTE: "+c)
-for c in ["mode","net",*K]:
-    if c not in r:
-        raise SystemExit("v414 COLONNE ABSENTE: "+c)
+for c in K+["entry_time"]:
+    if c not in o: raise SystemExit("v44 COLONNE ABSENTE: "+c)
+for c in ["mode","net"]+K:
+    if c not in r: raise SystemExit("v414 COLONNE ABSENTE: "+c)
 
-o["entry_time"]=pd.to_datetime(
-    o["entry_time"],utc=True,errors="coerce"
-)
+o["entry_time"]=pd.to_datetime(o["entry_time"],utc=True,errors="coerce")
 if o.entry_time.isna().any():
     raise SystemExit("entry_time invalide")
 
-# Identifiant déterministe des trades originaux
 o["_rank"]=o.groupby(K).cumcount()
 o["trade_id"]=[f"T{i:05d}" for i in range(len(o))]
 
-# ORIGINAL replay = référence exacte V4.14
-orig=r[r.mode=="ORIGINAL"].copy()
+orig=r[r["mode"]=="ORIGINAL"].copy()
 orig["_rank"]=orig.groupby(K).cumcount()
 
 orig=orig.merge(
-    o[K+["_rank","trade_id","entry_time","entry_price"]],
+    o[K+["_rank","trade_id","entry_time"]],
     on=K+["_rank"],how="left",validate="one_to_one"
 )
 
 if orig.trade_id.isna().any():
     raise SystemExit("ORIGINAL non apparié")
 
-orig=orig[["trade_id","net"]].rename(
+orig=orig[["trade_id"]+K+["entry_time","net"]].rename(
     columns={"net":"original_net"}
 )
 
 print("ORIGINAL",len(orig))
 
-# Analyse de chaque filtre
 MODES=["B1_ALL","GAP0","GAP10","GAP25","GAP50"]
 all_rows=[]
 
 for mode in MODES:
-    b=r[r.mode==mode].copy()
-    b["_rank"]=b.groupby(K).cumcount()
+    q=r[r["mode"]==mode].copy()
+    q["_rank"]=q.groupby(K).cumcount()
 
-    b=b.merge(
+    q=q.merge(
         o[K+["_rank","trade_id"]],
         on=K+["_rank"],how="left",
         validate="many_to_one"
     )
 
-    if b.trade_id.isna().any():
+    if q.trade_id.isna().any():
         raise SystemExit(f"{mode}: trade non apparié")
 
-    b=b.merge(orig,on="trade_id",how="left")
-    b["mode"]=mode
-    all_rows.append(b)
+    q=q.merge(
+        orig[["trade_id","original_net"]],
+        on="trade_id",how="left",
+        validate="one_to_one"
+    )
+    q["mode"]=mode
+    all_rows.append(q)
 
 b=pd.concat(all_rows,ignore_index=True)
+
+def base_group(mask):
+    return orig[mask].copy()
 
 # ---------- GLOBAL ----------
 rows=[]
 
 for mode,q in b.groupby("mode"):
-    retained=set(q.trade_id)
-    base=orig.copy()
-    base["status"]=np.where(
-        base.trade_id.isin(retained),"RETAINED","EXCLUDED"
-    )
+    ids=set(q.trade_id)
+    rr=orig[orig.trade_id.isin(ids)]
+    xx=orig[~orig.trade_id.isin(ids)]
+    rb=q
 
-    rr=base[base.status=="RETAINED"]
-    xx=base[base.status=="EXCLUDED"]
+    n=len(orig)
 
-    z=q.merge(
-        base[["trade_id","status"]],
-        on="trade_id",how="left"
-    )
-
-    rb=z[z.status=="RETAINED"]
-
-    n=len(base)
-    nr=len(rr)
-    ne=len(xx)
-
-    # Contribution par trade candidat
-    baseline_sum=base.original_net.sum()
-    retained_orig_sum=rr.original_net.sum()
-    b1_sum=rb.net.sum()
-
-    selection=(retained_orig_sum-baseline_sum)/n
-    entry=(b1_sum-retained_orig_sum)/n
-    total=(b1_sum-baseline_sum)/n
+    sel=(rr.original_net.sum()-orig.original_net.sum())/n
+    ent=(rb.net.sum()-rr.original_net.sum())/n
 
     rows.append({
         "mode":mode,
         "original_n":n,
-        "retained_n":nr,
-        "excluded_n":ne,
-        "retained_pct":nr/n,
-        "excluded_pct":ne/n,
-
-        "all_original_mean":base.original_net.mean(),
+        "retained_n":len(rr),
+        "excluded_n":len(xx),
+        "retained_pct":len(rr)/n,
+        "excluded_pct":len(xx)/n,
+        "all_original_mean":orig.original_net.mean(),
         "retained_original_mean":rr.original_net.mean(),
         "excluded_original_mean":xx.original_net.mean(),
         "retained_b1_mean":rb.net.mean(),
-
-        "selection_contribution":selection,
-        "entry_contribution":entry,
-        "total_contribution":total,
-
+        "selection_contribution":sel,
+        "entry_contribution":ent,
+        "total_contribution":sel+ent,
         "excluded_win":(xx.original_net>0).mean(),
         "excluded_loss_pct":(xx.original_net<0).mean(),
-        "retained_original_win":
-            (rr.original_net>0).mean(),
-        "retained_b1_win":
-            (rb.net>0).mean()
+        "retained_original_win":(rr.original_net>0).mean(),
+        "retained_b1_win":(rb.net>0).mean()
     })
 
 A=pd.DataFrame(rows)
@@ -134,15 +109,16 @@ A.to_csv(O/"v417_survivorship.csv",index=False)
 
 # ---------- FOLD ----------
 rows=[]
+
 for (mode,fold),q in b.groupby(["mode","fold"]):
     ids=set(q.trade_id)
-    base=orig.copy()
-    rr=base[base.trade_id.isin(ids)]
+    rr=orig[(orig.fold==fold)&orig.trade_id.isin(ids)]
+    base=orig[orig.fold==fold]
     xx=base[~base.trade_id.isin(ids)]
-    rb=q[q.trade_id.isin(ids)]
 
     rows.append({
-        "mode":mode,"fold":fold,
+        "mode":mode,
+        "fold":fold,
         "original_n":len(base),
         "retained_n":len(rr),
         "excluded_n":len(xx),
@@ -151,13 +127,11 @@ for (mode,fold),q in b.groupby(["mode","fold"]):
         "retained_original_mean":rr.original_net.mean(),
         "excluded_original_mean":
             xx.original_net.mean() if len(xx) else np.nan,
-        "b1_mean":rb.net.mean(),
+        "b1_mean":q.net.mean(),
         "selection_contribution":
-            (rr.original_net.sum()-
-             base.original_net.sum())/len(base),
+            (rr.original_net.sum()-base.original_net.sum())/len(base),
         "entry_contribution":
-            (rb.net.sum()-
-             rr.original_net.sum())/len(base)
+            (q.net.sum()-rr.original_net.sum())/len(base)
     })
 
 F=pd.DataFrame(rows)
@@ -165,24 +139,17 @@ F.to_csv(O/"v417_fold.csv",index=False)
 
 # ---------- MARKET ----------
 rows=[]
+
 for (mode,sym,it),q in b.groupby(
     ["mode","symbol","interval"]
 ):
     ids=set(q.trade_id)
     base=orig[
-        (orig.trade_id.isin(ids)) |
         (orig.symbol==sym)&
         (orig.interval==it)
     ]
-
-    base=orig[
-        (orig.symbol==sym)&
-        (orig.interval==it)
-    ]
-
     rr=base[base.trade_id.isin(ids)]
     xx=base[~base.trade_id.isin(ids)]
-    rb=q
 
     rows.append({
         "mode":mode,
@@ -196,24 +163,30 @@ for (mode,sym,it),q in b.groupby(
         "retained_original_mean":rr.original_net.mean(),
         "excluded_original_mean":
             xx.original_net.mean() if len(xx) else np.nan,
-        "b1_mean":rb.net.mean()
+        "b1_mean":q.net.mean(),
+        "selection_contribution":
+            (rr.original_net.sum()-base.original_net.sum())/len(base),
+        "entry_contribution":
+            (q.net.sum()-rr.original_net.sum())/len(base)
     })
 
 M=pd.DataFrame(rows)
 M.to_csv(O/"v417_market.csv",index=False)
 
-# ---------- SIGNAL ----------
+# ---------- SIGNAL / REGIME ----------
 def table(cols,name):
     rows=[]
+
     for key,q in b.groupby(cols):
-        if not isinstance(key,tuple): key=(key,)
-        ids=set(q.trade_id)
+        if not isinstance(key,tuple):
+            key=(key,)
 
         mask=np.ones(len(orig),dtype=bool)
         for c,v in zip(cols,key):
             mask &= orig[c].eq(v)
 
         base=orig[mask]
+        ids=set(q.trade_id)
         rr=base[base.trade_id.isin(ids)]
         xx=base[~base.trade_id.isin(ids)]
 
@@ -224,13 +197,18 @@ def table(cols,name):
             "retained_pct":
                 len(rr)/len(base) if len(base) else np.nan,
             "original_mean":base.original_net.mean(),
-            "retained_original_mean":
-                rr.original_net.mean(),
+            "retained_original_mean":rr.original_net.mean(),
             "excluded_original_mean":
-                xx.original_net.mean()
-                if len(xx) else np.nan,
-            "b1_mean":q.net.mean()
+                xx.original_net.mean() if len(xx) else np.nan,
+            "b1_mean":q.net.mean(),
+            "selection_contribution":
+                (rr.original_net.sum()-base.original_net.sum())/len(base)
+                if len(base) else np.nan,
+            "entry_contribution":
+                (q.net.sum()-rr.original_net.sum())/len(base)
+                if len(base) else np.nan
         }
+
         z.update(dict(zip(cols,key)))
         rows.append(z)
 
@@ -241,22 +219,24 @@ def table(cols,name):
 S=table(["mode","signal"],"signal")
 G=table(["mode","regime"],"regime")
 
-# ---------- AUDIT TRADE PAR TRADE ----------
+# ---------- TRADE AUDIT ----------
 audit=[]
 
 for mode,q in b.groupby("mode"):
-    ids=set(q.trade_id)
+    qm=q.set_index("trade_id")
 
     for _,z in orig.iterrows():
         tid=z.trade_id
-        hit=q[q.trade_id==tid]
 
-        if len(hit):
-            b1=float(hit.iloc[0].net)
+        if tid in qm.index:
+            h=qm.loc[tid]
+            b1=float(h.net)
             status="RETAINED"
+            delta=b1-float(z.original_net)
         else:
             b1=np.nan
             status="EXCLUDED"
+            delta=np.nan
 
         audit.append({
             "trade_id":tid,
@@ -272,9 +252,7 @@ for mode,q in b.groupby("mode"):
             "original_net":z.original_net,
             "status":status,
             "b1_net":b1,
-            "delta_net":
-                b1-z.original_net
-                if np.isfinite(b1) else np.nan
+            "delta_net":delta
         })
 
 AD=pd.DataFrame(audit)
@@ -302,12 +280,12 @@ S.to_string(index=False),
 "## REGIME",
 G.to_string(index=False),
 "",
-"## INTERPRETATION",
+"## METHODE",
 "- selection_contribution = effet du rejet des trades.",
-"- entry_contribution = effet du changement d'entrée B1 sur les trades retenus.",
-"- total_contribution = effet combiné par trade candidat.",
-"- EXCLUDED = trade absent du filtre.",
-"- RETAINED = trade conservé par le filtre.",
+"- entry_contribution = effet du changement d'entrée B1.",
+"- total_contribution = selection + entry.",
+"- EXCLUDED = trade rejeté par le filtre.",
+"- RETAINED = trade conservé.",
 "- Aucun nouveau signal.",
 "- Aucun holdout.",
 "- Aucun paramètre optimisé.",
