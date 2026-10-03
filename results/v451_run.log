@@ -1,0 +1,9 @@
+MISS BTCUSDT-aggTrades-2026-10-03.zip HTTPError
+Traceback (most recent call last):
+  File "/home/runner/work/scalp_lab/scalp_lab/research_v451.py", line 35, in <module>
+    d=load(s); tr=d[d.t<pd.Timestamp("2026-07-01",tz="UTC")]; te=d[(d.t>=pd.Timestamp("2026-07-01",tz="UTC"))&(d.t<pd.Timestamp("2026-09-01",tz="UTC"))]; ho=d[d.t>=pd.Timestamp("2026-09-01",tz="UTC")]
+      ^^^^^^^
+  File "/home/runner/work/scalp_lab/scalp_lab/research_v451.py", line 23, in load
+    return pd.concat(R).groupby(level=0).close.last().sort_index().reset_index(names="t")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: Series.reset_index() got an unexpected keyword argument 'names'
