@@ -1,0 +1,57 @@
+name: SCALP LAB V4.27
+
+on:
+  push:
+    paths:
+      - research_v427.py
+      - .github/workflows/V427.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scalp-lab-v427
+  cancel-in-progress: true
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Mark STARTED
+        run: |
+          mkdir -p results
+          printf "# V4.27 STATUS\n\nSTARTED\n\n%s\n" "$(date -u)" > results/v427_status.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results/v427_status.md
+          git commit -m "V4.27 started" || true
+          git push || true
+      - name: Install
+        run: python -m pip install -r requirements.txt
+      - name: Research
+        run: |
+          set -o pipefail
+          python -u research_v427.py 2>&1 | tee results/v427_run.log
+      - name: Mark COMPLETED
+        if: success()
+        run: |
+          printf "# V4.27 STATUS\n\nCOMPLETED\n\n%s\n" "$(date -u)" > results/v427_status.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results/v427_*.csv results/summary_v427.md results/v427_status.md results/v427_run.log
+          git diff --cached --quiet || git commit -m "Add V4.27 research results"
+          git push
+      - name: Mark FAILED
+        if: failure()
+        run: |
+          printf "# V4.27 STATUS\n\nFAILED\n\n%s\n" "$(date -u)" > results/v427_status.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results/v427_status.md results/v427_run.log || true
+          git diff --cached --quiet || git commit -m "V4.27 failed"
+          git push || true
