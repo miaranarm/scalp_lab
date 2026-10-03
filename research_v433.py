@@ -39,7 +39,7 @@ def load(s):
  return d.reset_index(names="t")
 
 def ev(d,th,h,fee):
- sig=np.where(d.imb>th,-1,np.where(d.imb<-th,1,0)); r=d.close.shift(-h)/d.close-1; x=pd.Series(sig)*r-fee; x=x[sig!=0].dropna()
+ sig=np.where(d.imb>th,-1,np.where(d.imb<-th,1,0)); r=d.close.shift(-h)/d.close-1; x=pd.Series(sig,index=d.index)*r-fee; x=x[sig!=0].dropna()
  return (float(x.mean()),len(x),float(x.sum())) if len(x) else (np.nan,0,np.nan)
 
 R=[]; S=[]
