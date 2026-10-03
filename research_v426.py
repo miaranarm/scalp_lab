@@ -52,6 +52,6 @@ def md(df):
 with open("results/summary_v426.md","w") as z:
  z.write("# V4.26 — Volume Shock Continuation\n\n")
  z.write("Abnormal base volume versus 48-bar median + candle direction. Fixed thresholds 1.5/2/2.5, horizons 1/3/6. Chronological TRAIN/TEST; final 30d confirmation-only.\n\n")
- z.write("## FINAL HOLDOUT\n\n"+q.to_markdown(index=False)+"\n\n")
+ z.write("## FINAL HOLDOUT\n\n"+md(q)+"\n\n")
  z.write(f"FINAL negative blocks: {(q.final_return<0).sum()}/{len(q)}\n\n")
- z.write("## OOS folds\n\n"+o.to_markdown(index=False)+"\n")
+ z.write("## OOS folds\n\n"+md(o)+"\n")
