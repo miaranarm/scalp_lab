@@ -10,6 +10,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: scalp-lab-v426
+  cancel-in-progress: true
+
 jobs:
   research:
     runs-on: ubuntu-latest
@@ -20,14 +24,38 @@ jobs:
         with:
           python-version: "3.11"
 
-      - run: python -m pip install -r requirements.txt
-
-      - run: python -u research_v426.py
-
-      - name: Save results
+      - name: Mark STARTED
         run: |
+          mkdir -p results
+          printf "# V4.26 STATUS\n\nSTARTED\n\n%s\n" "$(date -u)" > results/v426_status.md
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add results/v426_*.csv results/summary_v426.md
-          git diff --cached --quiet || git commit -m "Add V4.26 volume shock research"
+          git add results/v426_status.md
+          git commit -m "V4.26 started" || true
+          git push || true
+
+      - name: Install
+        run: python -m pip install -r requirements.txt
+
+      - name: Research
+        run: python -u research_v426.py
+
+      - name: Mark COMPLETED
+        if: success()
+        run: |
+          printf "# V4.26 STATUS\n\nCOMPLETED\n\n%s\n" "$(date -u)" > results/v426_status.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results/v426_*.csv results/summary_v426.md results/v426_status.md
+          git diff --cached --quiet || git commit -m "Add V4.26 research results"
           git push
+
+      - name: Mark FAILED
+        if: failure()
+        run: |
+          printf "# V4.26 STATUS\n\nFAILED\n\n%s\n" "$(date -u)" > results/v426_status.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results/v426_status.md
+          git diff --cached --quiet || git commit -m "V4.26 failed"
+          git push || true
