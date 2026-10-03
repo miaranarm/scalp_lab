@@ -20,7 +20,7 @@ def load(s):
     Path(p).unlink(missing_ok=True)
    except Exception as e: print("MISS",os.path.basename(u),type(e).__name__)
  if not R: raise RuntimeError("no data")
- return pd.concat(R).groupby(level=0).close.last().sort_index().reset_index()
+ return pd.concat(R).groupby(level=0).close.last().sort_index().reset_index().rename(columns={"b":"t"})
 def ev(d,f,sl,h,t,cost):
  x=d.set_index("t").resample("15min").last().dropna(); a=x.close.ewm(span=f,adjust=False).mean(); b=x.close.ewm(span=sl,adjust=False).mean(); sg=np.sign(a-b).to_numpy()
  if t:
