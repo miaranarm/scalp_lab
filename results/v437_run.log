@@ -23,8 +23,60 @@ OK BTCUSDT-aggTrades-2026-10-01.zip
   for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
 OK BTCUSDT-aggTrades-2026-10-02.zip
 MISS BTCUSDT-aggTrades-2026-10-03.zip HTTPError
-Traceback (most recent call last):
-  File "/home/runner/work/scalp_lab/scalp_lab/research_v437.py", line 53, in <module>
-    sc={(n,h):ev(tr,n,h,F[s])[2] for n in N for h in H}; n,h=max(sc,key=sc.get); a=ev(te,n,h,F[s]); b=ev(ho,n,h,F[s]); S.append([s,iv,n,h,sc[(n,h)],*a,*b])
-                                          ^
-NameError: name 'N' is not defined
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK ETHUSDT-aggTrades-2026-04.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK ETHUSDT-aggTrades-2026-05.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK ETHUSDT-aggTrades-2026-06.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK ETHUSDT-aggTrades-2026-07.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK ETHUSDT-aggTrades-2026-08.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK ETHUSDT-aggTrades-2026-09.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK ETHUSDT-aggTrades-2026-10-01.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK ETHUSDT-aggTrades-2026-10-02.zip
+MISS ETHUSDT-aggTrades-2026-10-03.zip HTTPError
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK SOLUSDT-aggTrades-2026-04.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK SOLUSDT-aggTrades-2026-05.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK SOLUSDT-aggTrades-2026-06.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK SOLUSDT-aggTrades-2026-07.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK SOLUSDT-aggTrades-2026-08.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK SOLUSDT-aggTrades-2026-09.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK SOLUSDT-aggTrades-2026-10-01.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK SOLUSDT-aggTrades-2026-10-02.zip
+MISS SOLUSDT-aggTrades-2026-10-03.zip HTTPError
+ symbol interval  lookback  horizon  train_total  test_mean  test_trades  test_total  holdout_mean  holdout_trades  holdout_total
+BTCUSDT       5m        48        1    -1.811858  -0.001240         1024   -1.269660     -0.001314             519      -0.682204
+BTCUSDT      15m        48        1    -0.520744  -0.001073          290   -0.311211     -0.001252             142      -0.177851
+ETHUSDT       5m        48        3    -1.271331  -0.001513          746   -1.128723     -0.001360             418      -0.568662
+ETHUSDT      15m        48        1    -0.393326  -0.001133          219   -0.248136     -0.001459             120      -0.175021
+SOLUSDT       5m        48        3    -2.138492  -0.001800          845   -1.520615     -0.001786             427      -0.762529
+SOLUSDT      15m        48        1    -0.579736  -0.001301          263   -0.342067     -0.001589             125      -0.198570
