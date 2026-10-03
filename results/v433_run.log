@@ -1,27 +1,41 @@
-/home/runner/work/scalp_lab/scalp_lab/research_v433.py:17: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+/home/runner/work/scalp_lab/scalp_lab/research_v433.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
   for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
-MISS BTCUSDT-aggTrades-2026-04.zip ValueError
-/home/runner/work/scalp_lab/scalp_lab/research_v433.py:17: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+OK BTCUSDT-aggTrades-2026-04.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v433.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
   for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
-MISS BTCUSDT-aggTrades-2026-05.zip ValueError
-/home/runner/work/scalp_lab/scalp_lab/research_v433.py:17: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+OK BTCUSDT-aggTrades-2026-05.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v433.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
   for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
-MISS BTCUSDT-aggTrades-2026-06.zip ValueError
-/home/runner/work/scalp_lab/scalp_lab/research_v433.py:17: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+OK BTCUSDT-aggTrades-2026-06.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v433.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
   for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
-MISS BTCUSDT-aggTrades-2026-07.zip ValueError
-/home/runner/work/scalp_lab/scalp_lab/research_v433.py:17: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+OK BTCUSDT-aggTrades-2026-07.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v433.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
   for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
-MISS BTCUSDT-aggTrades-2026-08.zip ValueError
-/home/runner/work/scalp_lab/scalp_lab/research_v433.py:17: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+OK BTCUSDT-aggTrades-2026-08.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v433.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
   for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
-MISS BTCUSDT-aggTrades-2026-09.zip ValueError
-MISS BTCUSDT-aggTrades-2026-10.zip HTTPError
+OK BTCUSDT-aggTrades-2026-09.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v433.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK BTCUSDT-aggTrades-2026-10-01.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v433.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK BTCUSDT-aggTrades-2026-10-02.zip
+MISS BTCUSDT-aggTrades-2026-10-03.zip HTTPError
 Traceback (most recent call last):
-  File "/home/runner/work/scalp_lab/scalp_lab/research_v433.py", line 33, in <module>
-    d5=load(s)
-       ^^^^^^^
-  File "/home/runner/work/scalp_lab/scalp_lab/research_v433.py", line 25, in load
-    if not rows: raise RuntimeError(f"No data for {s}")
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-RuntimeError: No data for BTCUSDT
+  File "/home/runner/work/scalp_lab/scalp_lab/research_v433.py", line 55, in <module>
+    tm=ev(te,t,h,F[s]); hm=ev(ho,t,h,F[s]); S.append([s,iv,t,h,scores[(t,h)],*tm,*hm])
+       ^^^^^^^^^^^^^^^
+  File "/home/runner/work/scalp_lab/scalp_lab/research_v433.py", line 42, in ev
+    sig=np.where(d.imb>th,-1,np.where(d.imb<-th,1,0)); r=d.close.shift(-h)/d.close-1; x=pd.Series(sig)*r-fee; x=x[sig!=0].dropna()
+                                                                                                                ~^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/pandas/core/series.py", line 1149, in __getitem__
+    key = check_bool_indexer(self.index, key)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/pandas/core/indexing.py", line 2681, in check_bool_indexer
+    return check_array_indexer(index, result)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/pandas/core/indexers/utils.py", line 539, in check_array_indexer
+    raise IndexError(
+IndexError: Boolean index has wrong length: 17710 instead of 35420
