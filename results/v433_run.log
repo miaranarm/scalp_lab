@@ -1,4 +1,27 @@
-  File "/home/runner/work/scalp_lab/scalp_lab/research_v433.py", line 73
-    """+s.to_string(index=False)+"
-                                 ^
-SyntaxError: unterminated string literal (detected at line 73)
+/home/runner/work/scalp_lab/scalp_lab/research_v433.py:17: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+MISS BTCUSDT-aggTrades-2026-04.zip ValueError
+/home/runner/work/scalp_lab/scalp_lab/research_v433.py:17: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+MISS BTCUSDT-aggTrades-2026-05.zip ValueError
+/home/runner/work/scalp_lab/scalp_lab/research_v433.py:17: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+MISS BTCUSDT-aggTrades-2026-06.zip ValueError
+/home/runner/work/scalp_lab/scalp_lab/research_v433.py:17: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+MISS BTCUSDT-aggTrades-2026-07.zip ValueError
+/home/runner/work/scalp_lab/scalp_lab/research_v433.py:17: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+MISS BTCUSDT-aggTrades-2026-08.zip ValueError
+/home/runner/work/scalp_lab/scalp_lab/research_v433.py:17: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+MISS BTCUSDT-aggTrades-2026-09.zip ValueError
+MISS BTCUSDT-aggTrades-2026-10.zip HTTPError
+Traceback (most recent call last):
+  File "/home/runner/work/scalp_lab/scalp_lab/research_v433.py", line 33, in <module>
+    d5=load(s)
+       ^^^^^^^
+  File "/home/runner/work/scalp_lab/scalp_lab/research_v433.py", line 25, in load
+    if not rows: raise RuntimeError(f"No data for {s}")
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: No data for BTCUSDT
