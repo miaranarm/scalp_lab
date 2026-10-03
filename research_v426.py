@@ -71,3 +71,5 @@ with open("results/summary_v426.md","w") as z:
  z.write("## OOS\n\n"+o.to_markdown(index=False)+"\n\n")
  z.write("## FINAL HOLDOUT\n\n"+f.to_markdown(index=False)+"\n\n")
  z.write(f"FINAL negative blocks: {(f.final_return<0).sum()}/{len(f)}\n")
+
+# trigger
