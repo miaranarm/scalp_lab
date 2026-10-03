@@ -1,0 +1,16 @@
+Traceback (most recent call last):
+  File "/home/runner/work/scalp_lab/scalp_lab/research_v437.py", line 25, in <module>
+    d0=load(s)
+       ^^^^^^^
+  File "/home/runner/work/scalp_lab/scalp_lab/research_v437.py", line 20, in load
+    d=pd.concat(R).groupby(level=0).agg({"o":"first","hi":"max","lo":"min","c":"last"}).sort_index().reset_index(names="t");return d
+      ^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/pandas/core/reshape/concat.py", line 382, in concat
+    op = _Concatenator(
+         ^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/pandas/core/reshape/concat.py", line 445, in __init__
+    objs, keys = self._clean_keys_and_objs(objs, keys)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/pandas/core/reshape/concat.py", line 507, in _clean_keys_and_objs
+    raise ValueError("No objects to concatenate")
+ValueError: No objects to concatenate
