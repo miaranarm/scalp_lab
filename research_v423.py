@@ -22,7 +22,7 @@ def load(s,iv):
    with zipfile.ZipFile(io.BytesIO(raw)) as q: d=pd.read_csv(q.open(q.namelist()[0]),header=None)
    d=d.iloc[:,:12]; d.columns=["t","o","h","l","c","v","ct","qv","n","tb","tq","x"]; fs.append(d)
   except Exception as e: print("MISS",s,iv,m.strftime("%Y-%m"),type(e).__name__)
- d=pd.concat(fs,ignore_index=True); d["t"]=pd.to_datetime(d.t,unit="ms",utc=True); d=d[(d.t>=START)&(d.t<END)]
+ d=pd.concat(fs,ignore_index=True); d=d[pd.to_numeric(d.t,errors="coerce").notna()].copy(); d["t"]=pd.to_datetime(pd.to_numeric(d.t),unit="ms",utc=True); d=d[(d.t>=START)&(d.t<END)]
  for c in ["o","h","l","c","v","tb"]: d[c]=pd.to_numeric(d[c],errors="coerce")
  d=d.dropna().drop_duplicates("t").sort_values("t").reset_index(drop=True); d["imb"]=2*d.tb/d.v-1; return d
 
