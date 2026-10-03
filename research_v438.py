@@ -52,4 +52,4 @@ for s in SYM:
   tr=d[d.t<c1]; te=d[(d.t>=c1)&(d.t<c2)]; ho=d[d.t>=c2]
   sc={(n,h,a):ev(tr,n,h,F[s],a)[2] for n in N for h in H for a in ATR}; n,h,a=max(sc,key=sc.get); x=ev(te,n,h,F[s],a); b=ev(ho,n,h,F[s],a); S.append([s,iv,n,h,a,sc[(n,h,a)],*x,*b])
 s=pd.DataFrame(S,columns=["symbol","interval","lookback","horizon","atr","train_total","test_mean","test_trades","test_total","holdout_mean","holdout_trades","holdout_total"])
-s.to_csv(OUT/"v438_holdout.csv",index=False); Path(OUT/"summary_v437.md").write_text("# V4.38 — DONCHIAN CLOSE BREAKOUT\n\n"+s.to_string(index=False)+"\n"); print(s.to_string(index=False))
+s.to_csv(OUT/"v438_holdout.csv",index=False); Path(OUT/"summary_v438.md").write_text("# V4.38 — DONCHIAN CLOSE BREAKOUT\n\n"+s.to_string(index=False)+"\n"); print(s.to_string(index=False))
