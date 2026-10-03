@@ -1,16 +1,30 @@
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK BTCUSDT-aggTrades-2026-04.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK BTCUSDT-aggTrades-2026-05.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK BTCUSDT-aggTrades-2026-06.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK BTCUSDT-aggTrades-2026-07.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK BTCUSDT-aggTrades-2026-08.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK BTCUSDT-aggTrades-2026-09.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK BTCUSDT-aggTrades-2026-10-01.zip
+/home/runner/work/scalp_lab/scalp_lab/research_v437.py:27: DtypeWarning: Columns (0,1,2,3,4,5,6) have mixed types. Specify dtype option on import or set low_memory=False.
+  for d in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["id","price","qty","first","last","t","maker"],chunksize=500000):
+OK BTCUSDT-aggTrades-2026-10-02.zip
+MISS BTCUSDT-aggTrades-2026-10-03.zip HTTPError
 Traceback (most recent call last):
-  File "/home/runner/work/scalp_lab/scalp_lab/research_v437.py", line 25, in <module>
-    d0=load(s)
-       ^^^^^^^
-  File "/home/runner/work/scalp_lab/scalp_lab/research_v437.py", line 20, in load
-    d=pd.concat(R).groupby(level=0).agg({"o":"first","hi":"max","lo":"min","c":"last"}).sort_index().reset_index(names="t");return d
-      ^^^^^^^^^^^^
-  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/pandas/core/reshape/concat.py", line 382, in concat
-    op = _Concatenator(
-         ^^^^^^^^^^^^^^
-  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/pandas/core/reshape/concat.py", line 445, in __init__
-    objs, keys = self._clean_keys_and_objs(objs, keys)
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/pandas/core/reshape/concat.py", line 507, in _clean_keys_and_objs
-    raise ValueError("No objects to concatenate")
-ValueError: No objects to concatenate
+  File "/home/runner/work/scalp_lab/scalp_lab/research_v437.py", line 53, in <module>
+    sc={(n,h):ev(tr,n,h,F[s])[2] for n in N for h in H}; n,h=max(sc,key=sc.get); a=ev(te,n,h,F[s]); b=ev(ho,n,h,F[s]); S.append([s,iv,n,h,sc[(n,h)],*a,*b])
+                                          ^
+NameError: name 'N' is not defined
