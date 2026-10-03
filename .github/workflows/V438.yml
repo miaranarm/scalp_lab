@@ -1,0 +1,27 @@
+name: V4.38 Volatility Breakout
+on:
+  push: {paths: [research_v438.py,.github/workflows/V438.yml]}
+  workflow_dispatch:
+permissions: {contents: write}
+concurrency: {group: scalp-lab-v438, cancel-in-progress: true}
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -r requirements.txt
+      - run: python -u research_v438.py 2>&1 | tee results/v438_run.log
+      - run: test -s results/v438_holdout.csv && test -s results/summary_v438.md
+      - if: success()
+        run: |
+          printf "# V4.38 STATUS\n\nCOMPLETED\n\n%s\n" "$(date -u)" > results/v438_status.md
+          git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results; git commit -m "V4.38 results" || true; git push
+      - if: failure()
+        run: |
+          printf "# V4.38 STATUS\n\nFAILED\n\n%s\n" "$(date -u)" > results/v438_status.md
+          git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results; git commit -m "V4.38 FAILED" || true; git push || true
