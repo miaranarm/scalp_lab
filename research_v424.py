@@ -97,3 +97,5 @@ def main():
     "", "## FINAL", "", f.to_string(index=False) if len(f) else "NO RESULTS"]
     open("results/summary_v424.md","w").write("\n".join(lines))
 if __name__=="__main__": main()
+
+# trigger
