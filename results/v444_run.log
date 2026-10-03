@@ -1,0 +1,10 @@
+MISS BTCUSDT-aggTrades-2026-10-03.zip HTTPError
+MISS ETHUSDT-aggTrades-2026-10-03.zip HTTPError
+MISS SOLUSDT-aggTrades-2026-10-03.zip HTTPError
+ symbol interval  threshold  persistence  horizon  confirm  train_total  test_mean  test_trades  test_total  holdout_mean  holdout_trades  holdout_total
+BTCUSDT       5m        0.6            4        3        1    -0.203879  -0.001452          182   -0.264223     -0.001354             185      -0.250542
+BTCUSDT      15m        0.4            3        3        1    -0.055495  -0.001610           62   -0.099844     -0.001286              64      -0.082273
+ETHUSDT       5m        0.5            4        1        1    -0.268397  -0.001370          225   -0.308185     -0.001206             202      -0.243659
+ETHUSDT      15m        0.6            4        1        1    -0.081696  -0.001223           70   -0.085579     -0.001108              61      -0.067575
+SOLUSDT       5m        0.5            4        6        1    -0.836115  -0.001906          549   -1.046609     -0.001449             542      -0.785163
+SOLUSDT      15m        0.5            2        6        1    -0.179665  -0.002106          187   -0.393803     -0.001493             183      -0.273263
