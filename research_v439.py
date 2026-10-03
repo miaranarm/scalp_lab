@@ -51,4 +51,4 @@ for s in SYM:
   tr=d[d.t<c1]; te=d[(d.t>=c1)&(d.t<c2)]; ho=d[d.t>=c2]
   sc={(n,h):ev(tr,n,h,F[s])[2] for n in N for h in H}; n,h=max(sc,key=sc.get); a=ev(te,n,h,F[s]); b=ev(ho,n,h,F[s]); S.append([s,iv,n,h,sc[(n,h)],*a,*b])
 s=pd.DataFrame(S,columns=["symbol","interval","lookback","horizon","train_total","test_mean","test_trades","test_total","holdout_mean","holdout_trades","holdout_total"])
-s.to_csv(OUT/"v439_holdout.csv",index=False); Path(OUT/"summary_v437.md").write_text("# V4.39 — EMA ZSCORE TREND — DONCHIAN CLOSE BREAKOUT\n\n"+s.to_string(index=False)+"\n"); print(s.to_string(index=False))
+s.to_csv(OUT/"v439_holdout.csv",index=False); Path(OUT/"summary_v439.md").write_text("# V4.39 — EMA ZSCORE TREND — DONCHIAN CLOSE BREAKOUT\n\n"+s.to_string(index=False)+"\n"); print(s.to_string(index=False))
