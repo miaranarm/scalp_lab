@@ -15,7 +15,8 @@ def load(s):
  return pd.concat(q).assign(t=lambda x:pd.to_datetime(x.t,unit="ms",utc=True),**{k:lambda x,k=k:x[k].astype(float) for k in "ohlcv"}).drop_duplicates("t").sort_values("t")
 def ev(d):
  x=d.set_index("t");rng=(x.h-x.l).replace(0,np.nan);up=(x.h-x.c)/rng;dn=(x.c-x.l)/rng;vm=x.v/x.v.rolling(24).median();a=[]
- for i in range(24,len(x)-H-1):
+ i=24
+ while i+H+1<len(x):
   s=1 if dn.iloc[i]>=.5 and vm.iloc[i]>=1.5 else -1 if up.iloc[i]>=.5 and vm.iloc[i]>=1.5 else 0
   if s:
    en=i+1;ex=en+H;a.append(s*(x.c.iloc[ex]/x.c.iloc[en]-1)-C);i=ex
