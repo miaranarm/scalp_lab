@@ -1,6 +1,0 @@
-SELECTED ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'] 
-     symbol  holdout_total  trades
-0  BTCUSDT       0.013018      16
-1  ETHUSDT       0.014518      14
-2  SOLUSDT      -0.016125      16 
-TOTAL 0.011410224815229079

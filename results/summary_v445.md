@@ -1,9 +1,0 @@
-# V4.45 — LOW-TURNOVER EMA CROSS
-
- symbol interval  fast  slow  horizon  trend_filter  train_total  test_mean  test_trades  test_total  holdout_mean  holdout_trades  holdout_total
-BTCUSDT       5m     8    34        6             1   -17.193019  -0.001015        11131  -11.301160     -0.001085            6026      -6.539094
-BTCUSDT      15m    20    80       36             1    -2.771195  -0.000503         4823   -2.426176     -0.000312            2645      -0.826231
-ETHUSDT       5m     8    34       12             1   -15.314399  -0.000994        11812  -11.741059     -0.001150            6276      -7.220346
-ETHUSDT      15m     8    34       24             1    -7.397593  -0.000680         4476   -3.044681     -0.001638            2370      -3.882020
-SOLUSDT       5m     8    34       24             1   -20.904737  -0.001375        11582  -15.929217     -0.001533            5844      -8.957301
-SOLUSDT      15m     8    34       36             1    -8.393113   0.000058         4604    0.264945      0.000246            2276       0.559917
