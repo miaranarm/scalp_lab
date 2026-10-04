@@ -66,7 +66,7 @@ for k in ["trades","total","mean","win","pf","dd"]:
 M=pd.DataFrame(CFG,columns=["fast","slow","slope","h","universe","regime"]);M["id"]=M.index
 Z=W[(W.trades_TRAIN>=20)&(W.trades_TEST>=10)].merge(M,on="id")
 Z["score"]=Z.mean_TRAIN*1000+Z.mean_TEST*2000+Z.pf_TRAIN+Z.pf_TEST
-Z=Z.sort_values(["score","pf_TEST"],ascending=False).head(20)
+Z=Z.sort_values(["score","pf_TEST"],ascending=False);Z.to_csv(O/"v505_all.csv",index=False);Z=Z.head(20)
 Z.to_csv(O/"v505_candidates.csv",index=False)
 if len(Z):
  b=int(Z.iloc[0].id);S=R[R.id==b];S.to_csv(O/"v505_selected.csv",index=False)
