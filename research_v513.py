@@ -80,7 +80,7 @@ for cost in COSTS:
   m=(E.time>=a)&(E.time<b)&E.family.eq(z.family)&((E.regime.eq(z.regime)) if z.regime!="ALL" else True)&((E.side.eq(z.side)) if z.side else True)
   oo=E[m].copy();oo["cost"]=cost;oo["net"]=oo.gross-oo.symbol.map(C)*cost;oos.append(oo)
 OOS=pd.concat(oos,ignore_index=True) if oos else pd.DataFrame()
-pd.DataFrame(sel,columns=R.columns).to_csv(O/"v513_selection.csv",index=False);R.to_csv(O/"v513_candidates.csv",index=False);OOS.to_csv(O/"v512_oos.csv",index=False)
+pd.DataFrame(sel,columns=R.columns).to_csv(O/"v513_selection.csv",index=False);R.to_csv(O/"v513_candidates.csv",index=False);OOS.to_csv(O/"v513_oos.csv",index=False)
 
 H0=pd.Timestamp("2026-04-01",tz="UTC");pre=E[E.time<H0].copy();best=[]
 for cost in COSTS:
@@ -100,6 +100,6 @@ B=B[(B.pf>=1.05)&(B.med_slice_mean>0)].sort_values(["med_slice_mean","pf","trade
 if len(B):
  z=B.iloc[0];m=(E.time>=H0)&E.family.eq(z.family)&((E.regime.eq(z.regime)) if z.regime!="ALL" else True)&((E.side.eq(z.side)) if z.side else True);hold=E[m].copy();hold["cost"]=z.cost;hold["net"]=hold.gross-hold.symbol.map(C)*z.cost
 else:z=None;hold=pd.DataFrame()
-B.to_csv(O/"v512_final_selection.csv",index=False);hold.to_csv(O/"v512_holdout.csv",index=False)
+B.to_csv(O/"v513_final_selection.csv",index=False);hold.to_csv(O/"v513_holdout.csv",index=False)
 md="# V5.13 EXECUTION-REALISTIC META OOS — NON-OVERLAP\n\nStrict 18m TRAIN → 6m TEST; next-open entry; fixed 12h outcome; costs 1.5x/2x. Final holdout 2026-04→2026-10 is never used for selection.\n\n## OOS\n"+str(stat(OOS))+"\n\n## HOLDOUT\n"+str(stat(hold))+("\nChampion: "+str(z.to_dict()) if z is not None else "\nNO CHAMPION")+"\n"
-(O/"summary_v512.md").write_text(md);print(md)
+(O/"summary_v513.md").write_text(md);print(md)
