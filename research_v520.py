@@ -107,5 +107,4 @@ hold.to_csv(R/"v520_holdout.csv",index=False)
 md="# V5.20 ROBUST 15m META\n\n18m TRAIN -> 6m OOS, one cost scenario (2x), non-overlap, next-open entry, ATR exits. Final holdout 2026-04->2026-10 is never used for selection.\n\n## OOS\n"+str(stat(O))+"\n\n## HOLDOUT\n"+str(stat(hold))+"\n"
 if z is not None and float(z.med)>0 and float(z.pf)>=1.0: md+="\n## CHAMPION\n"+str(z.to_dict())+"\n"
 else: md+="\n## NO ROBUST CHAMPION\nTop candidate did not clear median-slice mean > 0 and PF >= 1.0.\n"
-else: md+="\nNO CANDIDATE\n"
 (R/"summary_v520.md").write_text(md);print(md)
