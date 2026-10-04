@@ -1,0 +1,37 @@
+Traceback (most recent call last):
+  File "tslib.pyx", line 316, in pandas._libs.tslib.array_with_unit_to_datetime
+ValueError: could not convert string to float: 'open_time'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/runner/work/scalp_lab/scalp_lab/research_v459.py", line 26, in <module>
+    D={s:load(s) for s in SYM};rows=[]
+      ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/scalp_lab/scalp_lab/research_v459.py", line 26, in <dictcomp>
+    D={s:load(s) for s in SYM};rows=[]
+         ^^^^^^^
+  File "/home/runner/work/scalp_lab/scalp_lab/research_v459.py", line 16, in load
+    return pd.concat(q).assign(t=lambda x:pd.to_datetime(x.t,unit="ms",utc=True)).drop_duplicates("t").sort_values("t")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/pandas/core/frame.py", line 5239, in assign
+    data[k] = com.apply_if_callable(v, data)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/pandas/core/common.py", line 384, in apply_if_callable
+    return maybe_callable(obj, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/scalp_lab/scalp_lab/research_v459.py", line 16, in <lambda>
+    return pd.concat(q).assign(t=lambda x:pd.to_datetime(x.t,unit="ms",utc=True)).drop_duplicates("t").sort_values("t")
+                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/pandas/core/tools/datetimes.py", line 1067, in to_datetime
+    values = convert_listlike(arg._values, format)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/pandas/core/tools/datetimes.py", line 407, in _convert_listlike_datetimes
+    return _to_datetime_with_unit(arg, unit, name, utc, errors)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/pandas/core/tools/datetimes.py", line 526, in _to_datetime_with_unit
+    arr, tz_parsed = tslib.array_with_unit_to_datetime(arg, unit, errors=errors)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "tslib.pyx", line 344, in pandas._libs.tslib.array_with_unit_to_datetime
+  File "tslib.pyx", line 318, in pandas._libs.tslib.array_with_unit_to_datetime
+ValueError: non convertible value open_time with the unit 'ms', at position 0
