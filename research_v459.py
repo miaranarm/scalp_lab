@@ -10,7 +10,7 @@ def load(s):
   try:
    urllib.request.urlretrieve(u,p)
    with zipfile.ZipFile(p) as z:
-    q.append(pd.read_csv(z.open(z.namelist()[0]),header=None,usecols=[0,4],names=["t","close"]))
+    q.append(pd.read_csv(z.open(z.namelist()[0]),header=0,usecols=[0,4],names=["t","close"]))
    Path(p).unlink(missing_ok=True)
   except Exception as e:print("MISS",s,m,type(e).__name__)
  return pd.concat(q).assign(t=lambda x:pd.to_datetime(x.t,unit="ms",utc=True)).drop_duplicates("t").sort_values("t")
