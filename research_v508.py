@@ -45,7 +45,7 @@ rows=[]
 for (cid,cm,p),g in D.groupby(["id","cost_mult","period"]):rows.append([cid,cm,p,*metrics(g)])
 S=pd.DataFrame(rows,columns=["id","cost","period","trades","total","mean","win","pf","dd","loss_streak"])
 ann=[]
-for (cid,cm,y),g in D.assign(year=D.time.dt.year).groupby(["id","cost","year"]):ann.append([cid,cm,y,*metrics(g)])
+for (cid,cm,y),g in D.assign(year=D.time.dt.year).groupby(["id","cost_mult","year"]):ann.append([cid,cm,y,*metrics(g)])
 A1=pd.DataFrame(ann,columns=["id","cost","year","trades","total","mean","win","pf","dd","loss_streak"])
 boot=[]
 rng=np.random.default_rng(20261004)
