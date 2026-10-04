@@ -10,7 +10,7 @@ def load():
    try:
     urllib.request.urlretrieve(u,p)
     with zipfile.ZipFile(p) as z:
-     for x in pd.read_csv(z.open(z.namelist()[0]),header=None,names=list("iabctm")+["q"],chunksize=500000):
+     for x in pd.read_csv(z.open(z.namelist()[0]),header=None,names=["i","p","q","a","b","t","m"],chunksize=500000):
       x["t"]=pd.to_datetime(pd.to_numeric(x["t"],errors="coerce"),unit="ms",utc=True);x["p"]=pd.to_numeric(x["p"],errors="coerce");x=x.dropna(subset=["t","p"])
       if len(x):q.append(x.groupby(x.t.dt.floor("5min")).p.last())
     Path(p).unlink(missing_ok=True)
