@@ -30,10 +30,10 @@ def feat(x):
  return dict(c=c,h=h,l=l,e20=e20,e30=e30,e50=e50,e100=e100,e200=e200,atr=atr,slope=slope)
 
 def signals(f,fast,slow,short_slope):
- c,h,l=f["c"],f["h"],f["l"];ef=f[fast];es=f[slow];sl=f["slope"]
+ c=f["c"];ef=f[fast];es=f[slow];sl=f["slope"]
  bull=(ef>es)&(sl>short_slope);bear=(ef<es)&(sl<-short_slope)
- long=bull&(l<=f["e20"])&(c>ef)&(c.shift(1)>f["e20"].shift(1))
- short=bear&(h>=f["e20"])&(c<ef)&(c.shift(1)<f["e20"].shift(1))
+ long=bull&(c<f["e20"])&(c>ef)
+ short=bear&(c>f["e20"])&(c<ef)
  return np.where(long,1,np.where(short,-1,0))
 
 def trades(x,f,sig,h,tp,sl):
