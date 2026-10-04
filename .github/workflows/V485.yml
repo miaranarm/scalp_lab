@@ -1,0 +1,20 @@
+name: V4.85 Funding Contrarian
+on:
+  push:
+    paths: [research_v485.py, .github/workflows/V485.yml]
+  workflow_dispatch:
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -r requirements.txt
+      - run: python -u research_v485.py 2>&1 | tee results/v485_run.log
+      - run: test -s results/v485_oos.csv && test -s results/summary_v485.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v485-results
+          path: results/v485_*
