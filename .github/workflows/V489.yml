@@ -1,0 +1,18 @@
+name: V4.89 Trend Pullback
+on:
+  push:
+    paths: [research_v489.py, .github/workflows/V489.yml]
+  workflow_dispatch:
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -r requirements.txt
+      - run: python -u research_v489.py 2>&1 | tee results/v489_run.log
+      - run: test -s results/v489_oos.csv && test -s results/summary_v489.md
+      - uses: actions/upload-artifact@v4
+        with: {name: v489-results, path: results/v489_*}
