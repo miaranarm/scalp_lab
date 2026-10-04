@@ -2,7 +2,7 @@ import io,zipfile,urllib.request
 from pathlib import Path
 import numpy as np,pandas as pd
 
-O=Path("results");O.mkdir(exist_ok=True)
+R=Path("results");R.mkdir(exist_ok=True)
 A=pd.Timestamp("2020-01-01",tz="UTC");B=pd.Timestamp("2026-10-01",tz="UTC")
 H0=pd.Timestamp("2026-04-01",tz="UTC")
 SYM=["BTCUSDT","ETHUSDT","SOLUSDT"];C={"BTCUSDT":.0008,"ETHUSDT":.0009,"SOLUSDT":.0012}
@@ -94,7 +94,7 @@ for te in FOLDS:
 
 O=pd.concat(oos,ignore_index=True) if oos else pd.DataFrame()
 S=pd.DataFrame(sel,columns=["fold","family","tp","sl","mh","side","trades","train_total","train_mean","train_win","train_pf","med_slice_mean"])
-S.to_csv(O/"v519_selection.csv",index=False);O.to_csv(O/"v519_oos.csv",index=False)
+S.to_csv(R/"v519_selection.csv",index=False);O.to_csv(R/"v519_oos.csv",index=False)
 
 P=E[E.time<H0].copy();P["net"]=P.gross-P.symbol.map(C)*COST
 z=choose(P,pd.Timestamp("2022-01-01",tz="UTC"),H0)
@@ -102,9 +102,9 @@ if z is not None:
  m=(E.time>=H0)&(E.family==z.family)&(E.tp==z.tp)&(E.sl==z.sl)&(E.mh==z.mh)&(E.side==z.side)
  hold=E[m].copy();hold["net"]=hold.gross-hold.symbol.map(C)*COST
 else:hold=pd.DataFrame()
-if z is not None: pd.DataFrame([z.tolist()],columns=["family","tp","sl","mh","side","trades","total","mean","win","pf","med"]).to_csv(O/"v519_final_selection.csv",index=False)
-hold.to_csv(O/"v519_holdout.csv",index=False)
+if z is not None: pd.DataFrame([z.tolist()],columns=["family","tp","sl","mh","side","trades","total","mean","win","pf","med"]).to_csv(R/"v519_final_selection.csv",index=False)
+hold.to_csv(R/"v519_holdout.csv",index=False)
 md="# V5.19 ROBUST 15m META\n\n18m TRAIN -> 6m OOS, one cost scenario (2x), non-overlap, next-open entry, ATR exits. Final holdout 2026-04->2026-10 is never used for selection.\n\n## OOS\n"+str(stat(O))+"\n\n## HOLDOUT\n"+str(stat(hold))+"\n"
 if z is not None: md+="\n## CHAMPION\n"+str(z.to_dict())+"\n"
 else: md+="\nNO CHAMPION\n"
-(O/"summary_v519.md").write_text(md);print(md)
+(R/"summary_v519.md").write_text(md);print(md)
