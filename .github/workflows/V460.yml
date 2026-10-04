@@ -1,0 +1,27 @@
+name: V4.60 Funding Contrarian
+on:
+  push: {paths: [research_v460.py,.github/workflows/V460.yml]}
+  workflow_dispatch:
+permissions: {contents: write}
+concurrency: {group: scalp-lab-v460, cancel-in-progress: true}
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -r requirements.txt
+      - run: python -u research_v460.py 2>&1 | tee results/v460_run.log
+      - run: test -s results/v460_oos.csv && test -s results/summary_v460.md
+      - if: success()
+        run: |
+          printf "# V4.60 STATUS\n\nCOMPLETED\n\n%s\n" "$(date -u)" > results/v460_status.md
+          git config user.name "github-actions[bot]";git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f results/v460_* results/summary_v460.md;git commit -m "V4.60 results [skip ci]"||true;git push||true
+      - if: failure()
+        run: |
+          printf "# V4.60 STATUS\n\nFAILED\n\n%s\n" "$(date -u)" > results/v460_status.md
+          git config user.name "github-actions[bot]";git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f results/v460_*;git commit -m "V4.60 FAILED [skip ci]"||true;git push||true
