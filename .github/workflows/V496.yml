@@ -1,0 +1,18 @@
+name: V4.96 Shock Trend External 2023
+on:
+  push:
+    paths: [research_v496.py, .github/workflows/V496.yml]
+  workflow_dispatch:
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -r requirements.txt
+      - run: python -u research_v496.py 2>&1 | tee results/v496_run.log
+      - run: test -s results/v496_oos.csv && test -s results/summary_v496.md
+      - uses: actions/upload-artifact@v4
+        with: {name: v496-results, path: results/v496_*}
