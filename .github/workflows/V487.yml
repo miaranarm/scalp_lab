@@ -1,0 +1,18 @@
+name: V4.87 Cross Section Momentum
+on:
+  push:
+    paths: [research_v487.py, .github/workflows/V487.yml]
+  workflow_dispatch:
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -r requirements.txt
+      - run: python -u research_v487.py 2>&1 | tee results/v487_run.log
+      - run: test -s results/v487_oos.csv && test -s results/summary_v487.md
+      - uses: actions/upload-artifact@v4
+        with: {name: v487-results, path: results/v487_*}
