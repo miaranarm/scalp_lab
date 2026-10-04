@@ -1,0 +1,18 @@
+name: V4.90 Long Breakout
+on:
+  push:
+    paths: [research_v490.py, .github/workflows/V490.yml]
+  workflow_dispatch:
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -r requirements.txt
+      - run: python -u research_v490.py 2>&1 | tee results/v490_run.log
+      - run: test -s results/v490_oos.csv && test -s results/summary_v490.md
+      - uses: actions/upload-artifact@v4
+        with: {name: v490-results, path: results/v490_*}
