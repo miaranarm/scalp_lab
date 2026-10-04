@@ -1,3 +1,5 @@
+# V4.61 — HOURLY SEASONALITY WALK FORWARD
+
  symbol   month  selected_edge  oos_total  trades
 BTCUSDT 2026-01         0.0010  -0.106315      31
 BTCUSDT 2026-02         0.0010  -0.305783     111
@@ -25,10 +27,26 @@ SOLUSDT 2026-05         0.0010  -0.130285      92
 SOLUSDT 2026-06         0.0005  -0.431485     139
 SOLUSDT 2026-07         0.0005  -0.217121      93
 SOLUSDT 2026-08         0.0010  -0.042985      92
-SOLUSDT 2026-09         0.0010   0.020631      89 
-BY_SYMBOL symbol
+SOLUSDT 2026-09         0.0010   0.020631      89
+
+BY_SYMBOL
+symbol
 BTCUSDT   -1.610630
 ETHUSDT   -1.661193
 SOLUSDT   -1.700480
-Name: oos_total, dtype: float64 
-TOTAL -4.972303406720386 POS_MONTHS 0 / 9
+Name: oos_total, dtype: float64
+
+BY_MONTH
+month
+2026-01   -0.325510
+2026-02   -0.925155
+2026-03   -0.804076
+2026-04   -0.496078
+2026-05   -0.413785
+2026-06   -1.165858
+2026-07   -0.235355
+2026-08   -0.259396
+2026-09   -0.347091
+Name: oos_total, dtype: float64
+
+TOTAL -4.972303 POS_MONTHS 0/9
