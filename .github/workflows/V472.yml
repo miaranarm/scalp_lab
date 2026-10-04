@@ -1,0 +1,27 @@
+name: V4.72 Vol Normalized Momentum
+on:
+  push: {paths: [research_v472.py,.github/workflows/V472.yml]}
+  workflow_dispatch:
+permissions: {contents: write}
+concurrency: {group: scalp-lab-v472, cancel-in-progress: true}
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -r requirements.txt
+      - run: python -u research_v472.py 2>&1 | tee results/v472_run.log
+      - run: test -s results/v472_oos.csv && test -s results/summary_v472.md
+      - if: success()
+        run: |
+          printf "# V4.72 STATUS\n\nCOMPLETED\n\n%s\n" "$(date -u)" > results/v472_status.md
+          git config user.name "github-actions[bot]";git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f results/v472_* results/summary_v472.md;git commit -m "V4.72 results [skip ci]"||true;git push||true
+      - if: failure()
+        run: |
+          printf "# V4.72 STATUS\n\nFAILED\n\n%s\n" "$(date -u)" > results/v472_status.md
+          git config user.name "github-actions[bot]";git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f results/v472_*;git commit -m "V4.72 FAILED [skip ci]"||true;git push||true
