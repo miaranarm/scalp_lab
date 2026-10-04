@@ -8,11 +8,10 @@ def load(s):
   try:
    u=f"https://data.binance.vision/data/futures/um/monthly/klines/{s}/1h/{s}-1h-{m:%Y-%m}.zip";p="/tmp/k.zip";urllib.request.urlretrieve(u,p)
    with zipfile.ZipFile(p) as z:
-    x=pd.read_csv(z.open(z.namelist()[0]),usecols=[0,1,2,3,5]);x.columns=["t","o","h","l","c"];q.append(x)
+    x=pd.read_csv(z.open(z.namelist()[0]),usecols=[0,1,2,3,4,5]);x.columns=["t","o","h","l","c","v"];q.append(x)
   except:pass
  x=pd.concat(q).drop_duplicates("t").sort_values("t");x.t=pd.to_datetime(x.t,unit="ms",utc=True); 
  for c in ["o","h","l","c"]:x[c]=pd.to_numeric(x[c],errors="coerce")
- x["v"]=1
  return x.dropna()
 def ev(x,l,vm,h,c):
  up=x.c>x.h.shift(1).rolling(l).max();dn=x.c<x.l.shift(1).rolling(l).min();vr=x.v/x.v.rolling(24).median();sig=np.where(up&(vr>=vm),1,np.where(dn&(vr>=vm),-1,0));r=[];i=l
