@@ -1,0 +1,28 @@
+# V4.78 — HOLDOUT COST STRESS + MC
+
+ symbol  cost_mult       net  trades
+BTCUSDT       1.00  0.013018      16
+BTCUSDT       1.25  0.008218      16
+BTCUSDT       1.50  0.003418      16
+BTCUSDT       2.00 -0.006182      16
+ETHUSDT       1.00  0.014518      14
+ETHUSDT       1.25  0.009968      14
+ETHUSDT       1.50  0.005418      14
+ETHUSDT       2.00 -0.003682      14
+SOLUSDT       1.00 -0.016125      16
+SOLUSDT       1.25 -0.022525      16
+SOLUSDT       1.50 -0.028925      16
+SOLUSDT       2.00 -0.041725      16
+
+TOTAL_BY_MULT
+cost_mult
+1.00    0.01141
+1.25   -0.00434
+1.50   -0.02009
+2.00   -0.05159
+Name: net, dtype: float64
+
+MC_P_POSITIVE 0.5704
+MC_P05 -0.097500
+MC_MEDIAN 0.011642
+MC_P95 0.125872
