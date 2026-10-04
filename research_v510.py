@@ -42,8 +42,10 @@ for te in folds:
    for mode,a,b in [("TRAIN",train0,te),("TEST",te,test1)]:
     mask=(x.index>=a)&(x.index<b);ii=np.where(mask)[0]
     if len(ii)<50:continue
-    for i in ii:
-     if i+h+1>=len(x) or sg[i]==0 or np.isnan(atr.iloc[i]):continue
+    k=0
+    while k<len(ii):
+     i=ii[k]
+     if i+h+1>=len(x) or sg[i]==0 or np.isnan(atr.iloc[i]): k+=1; continue
      e=x.o.iloc[i+1];T=e+tp*atr.iloc[i];S=e-sl*atr.iloc[i];hit=None
      for j in range(i+1,min(len(x),i+1+h+1)):
       if x.h.iloc[j]>=T and x.l.iloc[j]<=S:hit=S;break
@@ -51,6 +53,8 @@ for te in folds:
       if x.l.iloc[j]<=S:hit=S;break
      if hit is None:hit=x.c.iloc[min(i+h,len(x)-1)]
      rs.append([te,cid,mode,(hit/e-1)-CUR*3,s])
+     k+=1
+     while k<len(ii) and ii[k]<=i+h: k+=1
   rows+=rs
 D=pd.DataFrame(rows,columns=["fold","id","period","net","symbol"])
 def stat(g):
@@ -65,5 +69,6 @@ for f,g in R.groupby("fold"):
  best=int(tr.iloc[0].id);sel.append([f,best,*CFG[best]])
  z=g[(g.id==best)&(g.period=="TEST")];oos.append(z)
 S=pd.DataFrame(sel,columns=["fold","id","threshold","h","tp_atr","sl_atr"]);Q=pd.concat(oos,ignore_index=True) if oos else pd.DataFrame()
-S.to_csv(O/"v510_selection.csv",index=False);R.to_csv(O/"v510_folds.csv",index=False);Q.to_csv(O/"v510_oos.csv",index=False)
-md="# V5.10 STRICT WALK-FORWARD\n\n18-month TRAIN selects threshold/horizon/ATR TP-SL; next 6-month TEST is untouched. Costs x3. Non-overlap. Long-only BULL volatility expansion.\n\n## SELECTION\n"+S.to_string(index=False)+"\n\n## OOS\n"+Q.to_string(index=False)+"\n\n## AGG OOS\n"+(str(stat(Q)) if len(Q) else "none")+"\n";(O/"summary_v510.md").write_text(md);print(md)
+SEL=D.merge(S[["fold","id"]],on=["fold","id"],how="inner");OOS=SEL[SEL.period=="TEST"].copy()
+S.to_csv(O/"v510_selection.csv",index=False);R.to_csv(O/"v510_folds.csv",index=False);OOS.to_csv(O/"v510_oos.csv",index=False)
+md="# V5.10 STRICT WALK-FORWARD\n\n18-month TRAIN selects threshold/horizon/ATR TP-SL; next 6-month TEST is untouched. Costs x3. Non-overlap. Long-only BULL volatility expansion.\n\n## SELECTION\n"+S.to_string(index=False)+"\n\n## OOS\n"+Q.to_string(index=False)+"\n\n## AGG OOS\n"+(str(stat(OOS)) if len(OOS) else "none")+"\n";(O/"summary_v510.md").write_text(md);print(md)
