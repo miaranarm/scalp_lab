@@ -21,7 +21,7 @@ def load(s):
 
 def ev(d,im,vol,cost):
  x=d.reset_index(drop=True);s=np.where((x.imb<=-im)&(x.vr>=vol),1,np.where((x.imb>=im)&(x.vr>=vol),-1,0));r=[];i=96
- while i+H<len(x):
+ while i+H+1<len(x):
   if not s[i]:i+=1;continue
   en=i+1;ex=en+H
   r.append(s[i]*(x.c.iloc[ex]/x.c.iloc[en]-1)-cost);i=ex
