@@ -1,11 +1,5 @@
-/home/runner/work/scalp_lab/scalp_lab/research_v460.py:21: RuntimeWarning: divide by zero encountered in scalar divide
-  en=i+1;ex=en+H;a.append(s[i]*(x.iloc[ex]/x.iloc[en]-1)-C);i=ex
-/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/numpy/_core/_methods.py:53: RuntimeWarning: invalid value encountered in reduce
-  return umr_sum(a, axis, dtype, out, keepdims, initial, where)
-/home/runner/work/scalp_lab/scalp_lab/research_v460.py:21: RuntimeWarning: invalid value encountered in scalar divide
-  en=i+1;ex=en+H;a.append(s[i]*(x.iloc[ex]/x.iloc[en]-1)-C);i=ex
-/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/numpy/_core/_methods.py:53: RuntimeWarning: invalid value encountered in reduce
-  return umr_sum(a, axis, dtype, out, keepdims, initial, where)
+# V4.60 — PREMIUM INDEX CONTRARIAN WALK FORWARD
+
  symbol   month  selected_z  oos_total  trades
 BTCUSDT 2026-01         2.5  -4.652830      11
 BTCUSDT 2026-02         1.5  -3.338814      41
@@ -33,10 +27,26 @@ SOLUSDT 2026-05         2.5   2.151339      13
 SOLUSDT 2026-06         2.5  -1.434322       7
 SOLUSDT 2026-07         1.5       -inf      40
 SOLUSDT 2026-08         1.5        inf      44
-SOLUSDT 2026-09         1.5  -1.055071      45 
-BY_SYMBOL symbol
+SOLUSDT 2026-09         1.5  -1.055071      45
+
+BY_SYMBOL
+symbol
 BTCUSDT   -34.776054
 ETHUSDT    11.453507
 SOLUSDT          NaN
-Name: oos_total, dtype: float64 
-TOTAL nan POS_MONTHS 1 / 9
+Name: oos_total, dtype: float64
+
+BY_MONTH
+month
+2026-01    -9.510624
+2026-02    -0.766275
+2026-03   -14.953367
+2026-04    -9.776138
+2026-05    -1.887899
+2026-06    -8.133243
+2026-07         -inf
+2026-08          inf
+2026-09    -9.347901
+Name: oos_total, dtype: float64
+
+TOTAL nan POS_MONTHS 1/9
