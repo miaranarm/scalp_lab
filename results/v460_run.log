@@ -1,25 +1,18 @@
 Traceback (most recent call last):
-  File "/home/runner/work/scalp_lab/scalp_lab/research_v460.py", line 36, in <module>
-    for s in SYM:D[s]=(load(s),px(s))
-                       ^^^^^^^
-  File "/home/runner/work/scalp_lab/scalp_lab/research_v460.py", line 8, in load
-    q=json.load(urllib.request.urlopen(f"{u}?symbol={s}&startTime={st}&endTime={en}&limit=1000"))
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/urllib/request.py", line 216, in urlopen
-    return opener.open(url, data, timeout)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/urllib/request.py", line 525, in open
-    response = meth(req, response)
-               ^^^^^^^^^^^^^^^^^^^
-  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/urllib/request.py", line 634, in http_response
-    response = self.parent.error(
-               ^^^^^^^^^^^^^^^^^^
-  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/urllib/request.py", line 563, in error
-    return self._call_chain(*args)
-           ^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/urllib/request.py", line 496, in _call_chain
-    result = func(*args)
-             ^^^^^^^^^^^
-  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/urllib/request.py", line 643, in http_error_default
-    raise HTTPError(req.full_url, code, msg, hdrs, fp)
-urllib.error.HTTPError: HTTP Error 451: 
+  File "/home/runner/work/scalp_lab/scalp_lab/research_v460.py", line 27, in <module>
+    p=max(((k,ev(tr,k)[0]) for k in K),key=lambda x:x[1])[0];r,n=ev(te,p);rows.append([s,m.strftime("%Y-%m"),p,r,n])
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/runner/work/scalp_lab/scalp_lab/research_v460.py", line 27, in <genexpr>
+    p=max(((k,ev(tr,k)[0]) for k in K),key=lambda x:x[1])[0];r,n=ev(te,p);rows.append([s,m.strftime("%Y-%m"),p,r,n])
+              ^^^^^^^^
+  File "/home/runner/work/scalp_lab/scalp_lab/research_v460.py", line 21, in ev
+    en=i+1;ex=en+H;a.append(s[i]*(x.iloc[ex]/x.iloc[en]-1)-C);i=ex
+                                  ~~~~~~^^^^
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/pandas/core/indexing.py", line 1191, in __getitem__
+    return self._getitem_axis(maybe_callable, axis=axis)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/pandas/core/indexing.py", line 1752, in _getitem_axis
+    self._validate_integer(key, axis)
+  File "/opt/hostedtoolcache/Python/3.11.16/x64/lib/python3.11/site-packages/pandas/core/indexing.py", line 1685, in _validate_integer
+    raise IndexError("single positional indexer is out-of-bounds")
+IndexError: single positional indexer is out-of-bounds
