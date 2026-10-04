@@ -16,7 +16,7 @@ def load(s):
     q.append(pd.read_csv(f.open(f.namelist()[0]),usecols=[0,1,2,3,4,5]))
   except: pass
  if not q:return pd.DataFrame()
- x=pd.concat(q).drop_duplicates().sort_values("0" if "0" in pd.concat(q,nrows=0).columns else q[0].columns[0])
+ x=pd.concat(q).drop_duplicates();x=x.sort_values(x.columns[0])
  x=x.iloc[:,:6];x.columns=["t","o","h","l","c","v"]
  x.t=pd.to_datetime(x.t,unit="ms",utc=True)
  return x.set_index("t").apply(pd.to_numeric,errors="coerce").dropna()
