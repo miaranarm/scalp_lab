@@ -1,0 +1,27 @@
+name: V4.56 SOL Train Test Holdout
+on:
+  push: {paths: [research_v456.py,.github/workflows/V456.yml]}
+  workflow_dispatch:
+permissions: {contents: write}
+concurrency: {group: scalp-lab-v456, cancel-in-progress: true}
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -r requirements.txt
+      - run: python -u research_v456.py 2>&1 | tee results/v456_run.log
+      - run: test -s results/v456_holdout.csv && test -s results/summary_v456.md
+      - if: success()
+        run: |
+          printf "# V4.56 STATUS\n\nCOMPLETED\n\n%s\n" "$(date -u)" > results/v456_status.md
+          git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results; git commit -m "V4.56 results" || true; git push
+      - if: failure()
+        run: |
+          printf "# V4.56 STATUS\n\nFAILED\n\n%s\n" "$(date -u)" > results/v456_status.md
+          git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results; git commit -m "V4.56 FAILED" || true; git push || true
