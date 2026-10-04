@@ -27,3 +27,4 @@ jobs:
           git add results/meta_*.csv results/summary_v503.md
           git commit -m "results: V503 meta-scan" || true
           git push || true
+# meta-scan active
