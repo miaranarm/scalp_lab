@@ -2,7 +2,7 @@ import zipfile,urllib.request,pandas as pd,numpy as np
 from pathlib import Path
 O=Path("results");O.mkdir(exist_ok=True)
 A=pd.Timestamp("2024-10-01",tz="UTC");B=pd.Timestamp("2026-10-04",tz="UTC")
-SYM=["BTCUSDT","ETHUSDT","SOLUSDT"];TH=[.0003,.0005,.0008,.0012]
+SYM=["BTCUSDT","ETHUSDT","SOLUSDT"];TH=[.00005,.0001,.0002,.0003,.0005]
 C={"BTCUSDT":.0012,"ETHUSDT":.0013,"SOLUSDT":.0016}
 
 def load(s):
@@ -39,7 +39,7 @@ def trades(k,f,th,cost):
   if abs(z.f)<th: continue
   sig=-1 if z.f>th else 1
   en=k.index[k.index<=z.t]
-  ex=k.index[k.index>=z.t+pd.Timedelta(hours=8)]
+  ex=k.index[k.index>=z.t+pd.Timedelta(hours=1)]
   if len(en)==0 or len(ex)==0: continue
   ep=float(k.loc[en[-1]]);xp=float(k.loc[ex[0]])
   r.append(sig*(xp/ep-1)-sig*z.f-cost)
