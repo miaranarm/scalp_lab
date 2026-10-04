@@ -97,6 +97,6 @@ if len(B):
  z=B.iloc[0];m=(E.time>=H0)&E.family.eq(z.family)&E.h.eq(z.h)&E.side.eq(z.side);hold=E[m].copy();hold["cost"]=z.cost;hold["net"]=hold.gross-hold.symbol.map(C)*z.cost
 else:z=None;hold=pd.DataFrame()
 
-pd.DataFrame(sel,columns=R.columns).to_csv(O/"v515_selection.csv",index=False);R.to_csv(O/"v514_candidates.csv",index=False);OOS.to_csv(O/"v514_oos.csv",index=False);B.to_csv(O/"v514_final_selection.csv",index=False);hold.to_csv(O/"v514_holdout.csv",index=False)
+pd.DataFrame(sel,columns=R.columns).to_csv(O/"v515_selection.csv",index=False);R.to_csv(O/"v515_candidates.csv",index=False);OOS.to_csv(O/"v515_oos.csv",index=False);B.to_csv(O/"v515_final_selection.csv",index=False);hold.to_csv(O/"v515_holdout.csv",index=False)
 md="# V5.15 ADAPTIVE 15m SCALP META OOS\n\nStrict 12m TRAIN → 3m TEST, next-open entry, non-overlap, 1h regime, horizons 1h/2h/3h, costs 1.5x/2x. Final holdout 2026-07→2026-10 untouched.\n\n## OOS\n"+str(stat(OOS))+"\n\n## HOLDOUT\n"+str(stat(hold))+("\nChampion: "+str(z.to_dict()) if z is not None else "\nNO CHAMPION")+"\n"
 (O/"summary_v515.md").write_text(md);print(md)
