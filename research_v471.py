@@ -20,6 +20,7 @@ def ev(d):
   s=1 if dn.iloc[i]>=.5 and vm.iloc[i]>=1.5 else -1 if up.iloc[i]>=.5 and vm.iloc[i]>=1.5 else 0
   if s:
    en=i+1;ex=en+H;a.append(s*(x.c.iloc[ex]/x.c.iloc[en]-1)-C);i=ex
+  else:i+=1
  q=np.array(a);return float(q.sum()) if len(q) else np.nan,len(q)
 rows=[]
 for s in SYM:
