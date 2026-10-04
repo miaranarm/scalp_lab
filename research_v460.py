@@ -16,7 +16,7 @@ def load(s):
  return pd.concat(q).assign(t=lambda x:pd.to_datetime(x.t,unit="ms",utc=True),premium=lambda x:x.premium.astype(float)).drop_duplicates("t").sort_values("t")
 def ev(d,k):
  x=d.set_index("t").premium;z=(x-x.rolling(24).mean())/x.rolling(24).std();s=np.where(z>k,-1,np.where(z<-k,1,0));a=[];i=24
- while i+H<len(x):
+ while i+H+1<len(x):
   if not s[i]:i+=1;continue
   en=i+1;ex=en+H;a.append(s[i]*(x.iloc[ex]/x.iloc[en]-1)-C);i=ex
  q=np.array(a);return float(q.sum()) if len(q) else np.nan,len(q)
