@@ -27,7 +27,7 @@ for m in pd.date_range("2025-01-01","2026-09-01",freq="MS",tz="UTC"):
   for h in H:
    r=tr.pct_change().rolling(h).sum().shift(-h)
    vals=[]
-   for i in range(lb,len(tr)-h):
+   for i in range(lb+1,len(tr)-h):
     q=rr.iloc[i].to_numpy(float)\n    if not np.isfinite(q).all(): continue\n    w,l=int(q.argmax()),int(q.argmin());vals.append((tr.iloc[i+h,w]/tr.iloc[i,w]-1)-(tr.iloc[i+h,l]/tr.iloc[i,l]-1)-C[SYM[w]]-C[SYM[l]])
    sc=np.nansum(vals)
    if sc>best[0]:best=(sc,(lb,h))
