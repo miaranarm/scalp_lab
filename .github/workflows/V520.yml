@@ -1,15 +1,15 @@
-name: V520 ROBUST 15m META
+name: V520 PULLBACK TREND-PULLBACK
 on:
   push:
-    paths:
-      - "research_v520.py"
-      - ".github/workflows/V520.yml"
+    paths: ["research_v520.py",".github/workflows/V520.yml"]
   workflow_dispatch:
+concurrency:
+  group: v520-pullback-main
+  cancel-in-progress: true
 jobs:
   scan:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    permissions: {contents: write}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -17,12 +17,12 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -u research_v520.py
       - uses: actions/upload-artifact@v4
-        with: {name: v520-results, path: results/v520_*}
+        with: {name: v520-pullback-results, path: results/v520_*}
       - name: Publish
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add results/v520_*
-          git diff --cached --quiet || git commit -m "Update V520 results"
+          git diff --cached --quiet || git commit -m "Update V520 pullback results"
           git pull --rebase origin main
           git push
