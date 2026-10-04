@@ -25,4 +25,4 @@ def ev(d):
 d=load();rows=[]
 for m in pd.date_range(A,B-pd.Timedelta(days=1),freq="MS",tz="UTC"):
  z=d[(d.t>=m)&(d.t<m+pd.offsets.MonthBegin(1))];r=ev(z);rows.append([m.strftime("%Y-%m"),*r])
-df=pd.DataFrame(rows,columns=["month","net_total","trades","mean"]);df.to_csv(O/"v453_holdout.csv",index=False);(O/"summary_v453.md").write_text("# V4.53 — SOL 15m EMA 8/34 MONTHLY OOS\n\n"+df.to_string(index=False));print(df.to_string(index=False))\n
+df=pd.DataFrame(rows,columns=["month","net_total","trades","mean"]);df.to_csv(O/"v453_holdout.csv",index=False);(O/"summary_v453.md").write_text("# V4.53 — SOL 15m EMA 8/34 MONTHLY OOS\n\n"+df.to_string(index=False));print(df.to_string(index=False))
