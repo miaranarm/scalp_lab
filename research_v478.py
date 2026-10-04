@@ -18,9 +18,9 @@ def trades(d):
  return np.array(a)
 rows=[];allg=[]
 for s in SYM:
- z=trades(load(s).set_index("t") if False else load(s)[lambda x:x.t>=CUT]);allg.extend(z)
+ z=trades(load(s).set_index("t") if False else load(s)[lambda x:x.t>=CUT]);allg.extend(z-C[s])
  for mult in [1,1.25,1.5,2]:
   rows.append([s,mult,z.sum()-len(z)*C[s]*mult,len(z)])
 df=pd.DataFrame(rows,columns=["symbol","cost_mult","net","trades"]);g=df.groupby("cost_mult").net.sum()
-rng=np.random.default_rng(20261004);a=np.array(allg);base=np.mean(a)-np.mean([C[s] for s in SYM]);mc=np.array([rng.choice(a,len(a),replace=True).sum()-len(a)*np.mean([C[s] for s in SYM]) for _ in range(5000)])
+rng=np.random.default_rng(20261004);a=np.array(allg);mc=np.array([rng.choice(a,len(a),replace=True).sum() for _ in range(5000)])
 (O/"v478_stress.csv").write_text(df.to_csv(index=False));(O/"summary_v478.md").write_text("# V4.78 — HOLDOUT COST STRESS + MC\n\n"+df.to_string(index=False)+f"\n\nTOTAL_BY_MULT\n{g}\n\nMC_P_POSITIVE {(mc>0).mean():.4f}\nMC_P05 {np.percentile(mc,5):.6f}\nMC_MEDIAN {np.median(mc):.6f}\nMC_P95 {np.percentile(mc,95):.6f}");print(df.to_string(index=False),"\n",g,"\nMC P>0",(mc>0).mean(),"P05",np.percentile(mc,5),"MED",np.median(mc))
