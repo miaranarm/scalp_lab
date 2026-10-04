@@ -16,7 +16,7 @@ def load(s):
    with zipfile.ZipFile(io.BytesIO(z)) as f:q.append(pd.read_csv(f.open(f.namelist()[0]),header=None,usecols=range(6)))
   except:pass
  if not q:return pd.DataFrame()
- x=pd.concat(q,ignore_index=True).drop_duplicates().sort_values(0);x.columns=["t","o","h","l","c","v"];x.t=pd.to_datetime(x.t,unit="ms",utc=True)
+ x=pd.concat(q,ignore_index=True).drop_duplicates();x=x.apply(pd.to_numeric,errors="coerce").dropna();x=x.sort_values(0);x.columns=["t","o","h","l","c","v"];x.t=pd.to_datetime(x.t,unit="ms",utc=True)
  return x.set_index("t").apply(pd.to_numeric,errors="coerce").dropna()
 
 def feat(x):
