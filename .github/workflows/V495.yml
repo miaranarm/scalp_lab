@@ -1,0 +1,18 @@
+name: V4.95 Shock Trend External 2024
+on:
+  push:
+    paths: [research_v495.py, .github/workflows/V495.yml]
+  workflow_dispatch:
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -r requirements.txt
+      - run: python -u research_v495.py 2>&1 | tee results/v495_run.log
+      - run: test -s results/v495_oos.csv && test -s results/summary_v495.md
+      - uses: actions/upload-artifact@v4
+        with: {name: v495-results, path: results/v495_*}
