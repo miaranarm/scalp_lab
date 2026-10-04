@@ -1,0 +1,32 @@
+name: V515 ADAPTIVE 15m
+on:
+  push:
+    paths:
+      - "research_v515.py"
+      - ".github/workflows/V515.yml"
+  workflow_dispatch:
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: python -u research_v515.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v515-results
+          path: results/v515_*
+      - name: Publish results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results/v515_*
+          git add results/summary_v515.md
+          git diff --cached --quiet || git commit -m "Update V515 results"
+          git pull --rebase origin main
+          git push
