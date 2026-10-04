@@ -93,7 +93,7 @@ for (ci,p),g in D.groupby(["id","period"]):
 R=pd.DataFrame(R,columns=["id","period","trades","total","mean","win","pf","dd"])
 meta=pd.DataFrame(CFG,columns=["fast","slow","slope","h","tp","sl","universe","regime"]);meta["id"]=meta.index
 wide=R.pivot(index="id",columns="period",values=["trades","total","mean","win","pf","dd"])
-wide.columns=["_".join(x) for x in wide.columns];wide=wide.reset_index().merge(meta,on="id")
+wide.columns=["_".join(x) for x in wide.columns];wide=wide.reset_index();\nfor col in ["trades","total","mean","win","pf","dd"]:\n for p in ["TRAIN","TEST","HOLDOUT"]:\n  if f"{col}_{p}" not in wide: wide[f"{col}_{p}"]=0.0\nwide=wide.merge(meta,on="id")
 # Selection: train PF + mean, enough trades, then test confirmation; holdout untouched.
 z=wide[(wide.trades_TRAIN>=40)&(wide.trades_TEST>=20)].copy()
 z["score"]=z.pf_TRAIN.fillna(0)*z.mean_TRAIN.fillna(-9)*1000
