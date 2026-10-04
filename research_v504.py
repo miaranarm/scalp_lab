@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np,pandas as pd
 
 O=Path("results");O.mkdir(exist_ok=True)
-A=pd.Timestamp("2019-09-13",tz="UTC");B=pd.Timestamp("2026-10-01",tz="UTC")
+A=pd.Timestamp("2020-01-01",tz="UTC");B=pd.Timestamp("2026-10-01",tz="UTC")
 SYM=["BTCUSDT","ETHUSDT","SOLUSDT"];C={"BTCUSDT":.0012,"ETHUSDT":.0013,"SOLUSDT":.0016}
 
 def load(s):
@@ -13,10 +13,10 @@ def load(s):
   try:
    z=urllib.request.urlopen(u,timeout=30).read()
    with zipfile.ZipFile(io.BytesIO(z)) as f:
-    q.append(pd.read_csv(f.open(f.namelist()[0]),usecols=[0,1,2,3,4,5]))
+    q.append(pd.read_csv(f.open(f.namelist()[0]),header=None,usecols=[0,1,2,3,4,5]))
   except: pass
  if not q:return pd.DataFrame()
- x=pd.concat(q).drop_duplicates();x=x.sort_values(x.columns[0])
+ x=pd.concat(q,ignore_index=True).drop_duplicates();x=x.apply(pd.to_numeric,errors="coerce").dropna();x=x.sort_values(x.columns[0])
  x=x.iloc[:,:6];x.columns=["t","o","h","l","c","v"]
  x.t=pd.to_datetime(x.t,unit="ms",utc=True)
  return x.set_index("t").apply(pd.to_numeric,errors="coerce").dropna()
@@ -30,29 +30,27 @@ def feat(x):
  return dict(c=c,h=h,l=l,e20=e20,e30=e30,e50=e50,e100=e100,e200=e200,atr=atr,slope=slope)
 
 def signals(f,fast,slow,short_slope):
- c=f["c"];ef=f[fast];es=f[slow];sl=f["slope"]
- bull=(ef>es)&(sl>short_slope)
- bear=(ef<es)&(sl<-short_slope)
- long=(bull)&(c<f["e20"])&(c>ef)
- short=(bear)&(c>f["e20"])&(c<ef)
+ c,h,l=f["c"],f["h"],f["l"];ef=f[fast];es=f[slow];sl=f["slope"]
+ bull=(ef>es)&(sl>short_slope);bear=(ef<es)&(sl<-short_slope)
+ long=bull&(l<=f["e20"])&(c>ef)&(c.shift(1)>f["e20"].shift(1))
+ short=bear&(h>=f["e20"])&(c<ef)&(c.shift(1)<f["e20"].shift(1))
  return np.where(long,1,np.where(short,-1,0))
 
 def trades(x,f,sig,h,tp,sl):
  out=[];n=len(x);c=x.c.values;hi=x.h.values;lo=x.l.values;atr=f["atr"].values
- for i in np.flatnonzero(sig):
-  if i+2>=n or i+h>=n or not np.isfinite(atr[i]) or atr[i]<=0:continue
+ i=0
+ while i<n:
+  if sig[i]==0 or i+h>=n or not np.isfinite(atr[i]) or atr[i]<=0: i+=1; continue
   d=int(sig[i]);entry=c[i];a=atr[i];pt=tp*a/entry;ps=sl*a/entry
   ret=0;exit_k=h;reason="time"
   for k in range(1,h+1):
    up=(hi[i+k]/entry-1)*d;dn=(lo[i+k]/entry-1)*d
-   if up>=pt and dn<=-ps:
-    ret=-ps;exit_k=k;reason="both";break
-   if up>=pt:
-    ret=pt;exit_k=k;reason="tp";break
-   if dn<=-ps:
-    ret=-ps;exit_k=k;reason="sl";break
+   if up>=pt and dn<=-ps: ret=-ps;exit_k=k;reason="both";break
+   if up>=pt: ret=pt;exit_k=k;reason="tp";break
+   if dn<=-ps: ret=-ps;exit_k=k;reason="sl";break
   else: ret=(c[i+h]/entry-1)*d
   out.append([x.index[i],d,ret,exit_k,reason,((hi[i+1:i+h+1]/entry-1)*d).max(),((lo[i+1:i+h+1]/entry-1)*d).min()])
+  i+=max(1,exit_k)
  return out
 
 def stat(g):
@@ -99,7 +97,7 @@ for col in ["trades","total","mean","win","pf","dd"]:
   if f"{col}_{p}" not in wide: wide[f"{col}_{p}"]=0.0
 wide=wide.merge(meta,on="id")
 # Selection: train PF + mean, enough trades, then test confirmation; holdout untouched.
-z=wide[(wide.trades_TRAIN>=40)&(wide.trades_TEST>=20)].copy()
+z=wide[(wide.trades_TRAIN>=25)&(wide.trades_TEST>=15)].copy()
 z["score"]=z.pf_TRAIN.fillna(0)*z.mean_TRAIN.fillna(-9)*1000
 z=z.sort_values(["score","pf_TRAIN"],ascending=False)
 top=z.head(15)
@@ -111,4 +109,4 @@ if best is not None:
  out.to_csv(O/"v504_selected.csv",index=False)
 else: out=pd.DataFrame()
 md="# V5.04 PULLBACK ROBUSTNESS\n\nStrict non-overlap, TP/SL path, TRAIN < 2024-01, TEST 2024-01→2025-09, untouched HOLDOUT from 2025-10. Costs included.\n\n## TOP CANDIDATES\n"+top.to_string(index=False)+"\n\n## SELECTED\n"+out.to_string(index=False)+"\n"
-(O/"summary_v504.md").write_text(md);print(md)
+(O/"summary_v504.md").write_text(md);print("DATA_ROWS", {s:len(v[0]) for s,v in DATA.items()});print("TRADES",len(D));print(md)
